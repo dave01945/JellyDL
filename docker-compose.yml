@@ -1,0 +1,13 @@
+services:
+  jellydl:
+    build:
+      context: .
+      args:
+        # Set this to your Jellyfin server URL at build time
+        # Users can also override it from the Settings page at runtime
+        VITE_JELLYFIN_URL: "${VITE_JELLYFIN_URL:-}"
+    image: jellydl:latest
+    container_name: jellydl
+    ports:
+      - "8080:80"
+    restart: unless-stopped
