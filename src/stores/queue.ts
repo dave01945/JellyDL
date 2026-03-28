@@ -50,10 +50,8 @@ function normalizeState(raw: unknown): TranscodeJobState | 'pending' {
 
 function normalizeProgress(raw: unknown): number | null {
   if (typeof raw !== 'number' || Number.isNaN(raw)) return null
-
-  // Support both 0..1 and 0..100 payload styles.
-  const percent = raw <= 1 ? raw * 100 : raw
-  return Math.max(0, Math.min(100, percent))
+  // Plugin always sends 0–100.
+  return Math.max(0, Math.min(100, raw))
 }
 
 function loadPersisted(): PersistedEntry[] {

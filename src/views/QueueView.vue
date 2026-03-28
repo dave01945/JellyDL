@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useQueueStore, type QueueEntry } from '@/stores/queue'
 import { useAuthStore } from '@/stores/auth'
 import NavBar from '@/components/NavBar.vue'
@@ -79,16 +80,41 @@ function formatEta(job: QueueEntry): string {
 
 // ─── Download ─────────────────────────────────────────────────────────────────
 
-function getBrowserDownloadUrl(job: QueueEntry): string {
-  const api = auth.getApiClient()
-  return api.getBrowserTranscodeFileUrl(job.jobId, auth.token ?? undefined)
-}
+const savingJobs = ref(new Set<string>())
+const downloadPercent = ref(new Map<string, number>())
 
 function getSuggestedDownloadName(job: QueueEntry): string {
   const rawName = (job.itemName || job.itemId || 'download').trim()
   const cleaned = rawName.replace(/[\\/:*?"<>|]/g, '_')
   const ext = (job.containerFormat || 'mp4').replace(/^\.+/, '').toLowerCase()
   return `${cleaned}.${ext}`
+}
+
+async function saveFile(job: QueueEntry) {
+  if (savingJobs.value.has(job.jobId)) return
+  savingJobs.value = new Set([...savingJobs.value, job.jobId])
+  downloadPercent.value = new Map([...downloadPercent.value, [job.jobId, 0]])
+  try {
+    const api = auth.getApiClient()
+    const { blob, filename } = await api.downloadTranscodeFile(job.jobId, (pct) => {
+      downloadPercent.value = new Map([...downloadPercent.value, [job.jobId, pct]])
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = getSuggestedDownloadName(job) || filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  } finally {
+    const nextSaving = new Set(savingJobs.value)
+    nextSaving.delete(job.jobId)
+    savingJobs.value = nextSaving
+    const nextPct = new Map(downloadPercent.value)
+    nextPct.delete(job.jobId)
+    downloadPercent.value = nextPct
+  }
 }
 </script>
 
@@ -155,18 +181,21 @@ function getSuggestedDownloadName(job: QueueEntry): string {
           <div class="flex items-center gap-2 flex-shrink-0">
 
             <!-- Download (Completed) -->
-            <a
+            <button
               v-if="job.state === 'Completed'"
-              :href="getBrowserDownloadUrl(job)"
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-400 text-xs font-semibold transition-colors"
+              @click="saveFile(job)"
+              :disabled="savingJobs.has(job.jobId)"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-500/30 disabled:opacity-60 disabled:cursor-not-allowed text-green-400 text-xs font-semibold transition-colors"
               title="Download file"
-              :download="getSuggestedDownloadName(job)"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <svg v-if="savingJobs.has(job.jobId)" class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              </svg>
+              <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
               </svg>
-              Save
-            </a>
+              {{ savingJobs.has(job.jobId) ? 'Saving…' : 'Save' }}
+            </button>
 
             <!-- Cancel (active jobs) / Remove (terminal state) -->
             <button
@@ -213,11 +242,34 @@ function getSuggestedDownloadName(job: QueueEntry): string {
 
         <!-- Completed: file size -->
         <p
-          v-if="job.state === 'Completed' && job.outputSizeBytes"
+          v-if="job.state === 'Completed' && job.outputSizeBytes && !savingJobs.has(job.jobId)"
           class="text-xs text-green-400"
         >
           {{ formatBytes(job.outputSizeBytes) }} ready to download
         </p>
+
+        <!-- Download progress bar -->
+        <div v-if="savingJobs.has(job.jobId)" class="space-y-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-jellyfin-muted">Downloading…</span>
+            <span class="font-medium text-green-400 tabular-nums">
+              {{ downloadPercent.get(job.jobId) === -1 ? '' : `${downloadPercent.get(job.jobId) ?? 0}%` }}
+            </span>
+          </div>
+          <div class="h-1.5 bg-jellyfin-bg rounded-full overflow-hidden">
+            <!-- Determinate -->
+            <div
+              v-if="(downloadPercent.get(job.jobId) ?? -1) >= 0"
+              class="h-full bg-green-500 rounded-full transition-all duration-300"
+              :style="{ width: `${Math.max(2, downloadPercent.get(job.jobId) ?? 0)}%` }"
+            />
+            <!-- Indeterminate: server didn't send Content-Length -->
+            <div
+              v-else
+              class="h-full w-1/3 bg-green-500/50 rounded-full animate-pulse"
+            />
+          </div>
+        </div>
 
         <!-- Failed: error message -->
         <p

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, TranscodeJobRequest } from '@/api/jellyfin'
+import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, TranscodeJobRequest, QualityPreset, SpeedPreset } from '@/api/jellyfin'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
@@ -62,10 +62,36 @@ const audioBitrates = [
   { value: '320000', label: '320 kbps', description: 'Near transparent quality' },
 ]
 
+const audioChannels = [
+  { value: '0', label: 'Original (copy)', description: 'Keep source channel layout' },
+  { value: '1', label: 'Mono', description: '1.0 — smallest file, voice-focused' },
+  { value: '2', label: 'Stereo', description: '2.0 — standard left/right' },
+  { value: '6', label: '5.1 Surround', description: '6-channel (FL, FR, C, LFE, BL, BR)' },
+  { value: '8', label: '7.1 Surround', description: '8-channel (adds side L/R)' },
+]
+
 const subtitleOptions = [
   { value: 'none', label: 'No subtitles' },
   { value: 'burn', label: 'Burn in (hardcoded)' },
   { value: 'embed', label: 'Embed (soft subs)' },
+]
+
+const qualityPresets: { value: QualityPreset; label: string; description: string }[] = [
+  { value: 'Custom',  label: 'Custom (manual bitrate)', description: 'Use the manual bitrate / CRF control below' },
+  { value: 'Low',     label: 'Low',      description: 'CRF 28 — smallest file, lowest quality' },
+  { value: 'Medium',  label: 'Medium',   description: 'CRF 23 — balanced quality' },
+  { value: 'High',    label: 'High',     description: 'CRF 18 — high quality' },
+  { value: 'VeryHigh', label: 'Very High', description: 'CRF 15 — near-lossless for most content' },
+]
+
+const speedPresets: { value: SpeedPreset; label: string; description: string }[] = [
+  { value: 'Default',  label: 'Default',   description: 'Use encoder built-in default' },
+  { value: 'Fastest',  label: 'Fastest',   description: 'Fastest encode, largest file' },
+  { value: 'VeryFast', label: 'Very Fast', description: 'Very fast encode' },
+  { value: 'Fast',     label: 'Fast',      description: 'Fast encode' },
+  { value: 'Medium',   label: 'Medium',    description: 'Balanced speed / compression' },
+  { value: 'Slow',     label: 'Slow',      description: 'Better compression, slower encode' },
+  { value: 'VerySlow', label: 'Very Slow', description: 'Best compression, slowest encode' },
 ]
 
 const selectedFormat = ref('mp4')
@@ -73,7 +99,10 @@ const selectedResolution = ref('1080p')
 const selectedBitrate = ref('8000000')
 const selectedAudioCodec = ref('aac')
 const selectedAudioBitrate = ref('128000')
+const selectedAudioChannels = ref('2')
 const selectedSubtitles = ref('none')
+const selectedQualityPreset = ref<QualityPreset>(settings.defaultQualityPreset)
+const selectedSpeedPreset = ref<SpeedPreset>(settings.defaultSpeedPreset)
 
 const posterUrl = computed(() => {
   const base = `${settings.jellyfinUrl}/Items/${props.item.Id}/Images/Primary?fillHeight=200&quality=90`
@@ -89,41 +118,29 @@ const autoVideoBitrateByResolution: Record<string, number> = {
   '360p': 1_000_000,
 }
 
+// Multipliers applied to the reference resolution bitrate for each CRF-based preset.
+// Reference rate ≈ CRF 18 (High quality). Derived from typical H.264 CRF output rates.
+const qualityPresetMultiplier: Record<QualityPreset, number> = {
+  Custom:   1.0,  // unused — manual bitrate used instead
+  VeryHigh: 1.75, // CRF 15
+  High:     1.0,  // CRF 18
+  Medium:   0.55, // CRF 23
+  Low:      0.28, // CRF 28
+}
+
+// Reference bitrates above assume H.264. Other codecs achieve different sizes at equivalent quality.
+const codecFormatMultiplier: Record<string, number> = {
+  'mp4':      1.0,   // H.264 baseline
+  'mp4-hevc': 0.6,   // HEVC is ~40% smaller at equivalent visual quality
+  'mkv':      1.0,   // H.264
+  'webm':     0.65,  // VP9 is comparable to HEVC
+  'avi':      1.1,   // DivX/MPEG-4 tends to run slightly larger than H.264
+}
+
 function toHumanSize(bytes: number): string {
   const gb = bytes / 1_073_741_824
   return gb >= 1 ? `~${gb.toFixed(1)} GB` : `~${(bytes / 1_048_576).toFixed(0)} MB`
 }
-
-const estimatedSize = computed(() => {
-  const durationSec = props.item.RunTimeTicks ? props.item.RunTimeTicks / 10_000_000 : 0
-  if (!durationSec) return 'Estimate unavailable'
-
-  // Copy-source video cannot be estimated numerically without source bitrate metadata.
-  if (selectedResolution.value === 'original') {
-    return selectedAudioCodec.value === 'copy'
-      ? 'Matches source file size'
-      : 'Near source size (audio re-encoded)'
-  }
-
-  const manualVideoBitrate = parseInt(selectedBitrate.value)
-  const videoBps = manualVideoBitrate > 0
-    ? manualVideoBitrate
-    : (autoVideoBitrateByResolution[selectedResolution.value] ?? 4_000_000)
-
-  let audioBps: number
-  if (selectedAudioCodec.value === 'copy') {
-    // Typical compressed source audio estimate when copying stream as-is.
-    audioBps = 192_000
-  } else if (selectedAudioCodec.value === 'flac') {
-    // FLAC is variable; this rough midpoint avoids severe underestimation.
-    audioBps = 900_000
-  } else {
-    const parsedAudio = parseInt(selectedAudioBitrate.value)
-    audioBps = parsedAudio > 0 ? parsedAudio : 128_000
-  }
-
-  return toHumanSize(((videoBps + audioBps) / 8) * durationSec)
-})
 
 // ─── TV Show scope selection ──────────────────────────────────────────────────
 type Scope = 'series' | 'season' | 'episodes'
@@ -144,6 +161,136 @@ const expandedSeasons = ref<Set<string>>(new Set())
 
 const selectedSeasonId = ref<string>('')
 const selectedEpisodeIds = ref<Set<string>>(new Set())
+
+// Fallback episode duration when no RunTimeTicks data is available (42-min drama average).
+const AVG_EPISODE_SEC = 42 * 60
+
+/**
+ * Derive total content duration (seconds) for the currently selected TV scope.
+ * Uses loaded episode RunTimeTicks where available, falls back to ChildCount / EpisodeCount × average.
+ */
+function getTvDurationSec(): number | null {
+  if (scope.value === 'episodes') {
+    let totalSec = 0
+    let count = 0
+    for (const seasonEps of Object.values(episodesBySeason.value)) {
+      for (const ep of seasonEps) {
+        if (selectedEpisodeIds.value.has(ep.Id)) {
+          totalSec += (ep.RunTimeTicks ?? 0) / 10_000_000
+          count++
+        }
+      }
+    }
+    if (count === 0) return null
+    return totalSec > 0 ? totalSec : count * AVG_EPISODE_SEC
+  }
+
+  if (scope.value === 'season') {
+    const eps = episodesBySeason.value[selectedSeasonId.value]
+    if (eps && eps.length > 0) {
+      const totalSec = eps.reduce((sum, ep) => sum + (ep.RunTimeTicks ?? 0) / 10_000_000, 0)
+      return totalSec > 0 ? totalSec : eps.length * AVG_EPISODE_SEC
+    }
+    // Episodes not yet loaded — use ChildCount × average
+    const season = seasons.value.find(s => s.Id === selectedSeasonId.value)
+    const count = season?.ChildCount ?? 0
+    return count > 0 ? count * AVG_EPISODE_SEC : null
+  }
+
+  // series scope — prefer the series-level RunTimeTicks if populated
+  if (props.item.RunTimeTicks) return props.item.RunTimeTicks / 10_000_000
+
+  // Extrapolate from any episodes already loaded
+  const allEps = Object.values(episodesBySeason.value).flat()
+  const totalCount = props.item.EpisodeCount ?? 0
+  if (allEps.length > 0) {
+    const loadedSec = allEps.reduce((sum, ep) => sum + (ep.RunTimeTicks ?? 0) / 10_000_000, 0)
+    const avgSec = loadedSec > 0 ? loadedSec / allEps.length : AVG_EPISODE_SEC
+    return avgSec * (totalCount > 0 ? totalCount : allEps.length)
+  }
+  return totalCount > 0 ? totalCount * AVG_EPISODE_SEC : null
+}
+
+/** Count of individual files that will be queued for the current TV scope. */
+function getTvItemCount(): number {
+  if (scope.value === 'episodes') return selectedEpisodeIds.value.size
+
+  if (scope.value === 'season') {
+    const eps = episodesBySeason.value[selectedSeasonId.value]
+    if (eps) return eps.length
+    return seasons.value.find(s => s.Id === selectedSeasonId.value)?.ChildCount ?? 0
+  }
+
+  // series — sum ChildCount across all seasons if loaded, else use EpisodeCount
+  if (seasons.value.length > 0) {
+    return seasons.value.reduce((sum, s) => sum + (s.ChildCount ?? 0), 0)
+  }
+  return props.item.EpisodeCount ?? 0
+}
+
+const estimatedSize = computed(() => {
+  const isTV = props.item.Type === 'Series'
+
+  let durationSec: number
+  if (isTV) {
+    const tvDur = getTvDurationSec()
+    if (tvDur === null) return 'Estimate unavailable'
+    durationSec = tvDur
+  } else {
+    durationSec = props.item.RunTimeTicks ? props.item.RunTimeTicks / 10_000_000 : 0
+    if (!durationSec) return 'Estimate unavailable'
+  }
+
+  // Copy-source video cannot be estimated numerically without source bitrate metadata.
+  if (selectedResolution.value === 'original') {
+    const itemCount = isTV ? getTvItemCount() : 0
+    const suffix = itemCount > 1 ? ` × ${itemCount} files` : ''
+    return selectedAudioCodec.value === 'copy'
+      ? `Matches source file size${suffix}`
+      : `Near source size (audio re-encoded)${suffix}`
+  }
+
+  const refBitrate = autoVideoBitrateByResolution[selectedResolution.value] ?? 4_000_000
+  const formatMult = codecFormatMultiplier[selectedFormat.value] ?? 1.0
+
+  let videoBps: number
+  if (selectedQualityPreset.value === 'Custom') {
+    const manualVideoBitrate = parseInt(selectedBitrate.value)
+    // Manual bitrate is codec-agnostic (user picks the number), so apply format multiplier
+    // only when using auto bitrate (0 = let encoder decide based on resolution reference).
+    videoBps = manualVideoBitrate > 0 ? manualVideoBitrate : refBitrate * formatMult
+  } else {
+    videoBps = refBitrate * qualityPresetMultiplier[selectedQualityPreset.value] * formatMult
+  }
+
+  let audioBps: number
+  if (selectedAudioCodec.value === 'copy') {
+    // Typical compressed source audio estimate when copying stream as-is.
+    audioBps = 192_000
+  } else if (selectedAudioCodec.value === 'flac') {
+    // FLAC is variable and not affected by channel count the same way; use a fixed midpoint.
+    audioBps = 900_000
+  } else {
+    const parsedAudio = parseInt(selectedAudioBitrate.value)
+    const baseBps = parsedAudio > 0 ? parsedAudio : 128_000
+    // Scale audio for surround channel counts relative to stereo (2ch) baseline.
+    const chCount = parseInt(selectedAudioChannels.value)
+    if (chCount === 1) {
+      audioBps = baseBps * 0.6        // mono is slightly more than half of stereo
+    } else if (chCount > 2) {
+      audioBps = baseBps * (chCount / 2) // 6ch → 3×, 8ch → 4×
+    } else {
+      audioBps = baseBps              // stereo (2) or "original" (0) — no adjustment
+    }
+  }
+
+  const sizeStr = toHumanSize(((videoBps + audioBps) / 8) * durationSec)
+  if (isTV) {
+    const itemCount = getTvItemCount()
+    return itemCount > 1 ? `${sizeStr} total (${itemCount} files)` : sizeStr
+  }
+  return sizeStr
+})
 
 async function loadSeasons() {
   if (seasons.value.length > 0) return
@@ -261,6 +408,15 @@ function resolveResolution(res: string): { maxWidth?: number; maxHeight?: number
   }
 }
 
+/** Format a TV episode name as "Show Name - S01E02 - Episode Name" */
+function episodeLabel(ep: { Name: string; IndexNumber?: number; ParentIndexNumber?: number }): string {
+  const seriesName = props.item.Name
+  const s = ep.ParentIndexNumber != null ? String(ep.ParentIndexNumber).padStart(2, '0') : null
+  const e = ep.IndexNumber != null ? String(ep.IndexNumber).padStart(2, '0') : null
+  const code = s && e ? `S${s}E${e}` : s ? `S${s}` : null
+  return code ? `${seriesName} - ${code} - ${ep.Name}` : `${seriesName} - ${ep.Name}`
+}
+
 /** Collect the list of { id, name } items to queue based on type + scope selection */
 async function collectTargets(): Promise<{ id: string; name: string }[]> {
   if (props.item.Type !== 'Series') {
@@ -272,7 +428,7 @@ async function collectTargets(): Promise<{ id: string; name: string }[]> {
     for (const seasonEps of Object.values(episodesBySeason.value)) {
       for (const ep of seasonEps) {
         if (selectedEpisodeIds.value.has(ep.Id)) {
-          targets.push({ id: ep.Id, name: ep.Name })
+          targets.push({ id: ep.Id, name: episodeLabel(ep) })
         }
       }
     }
@@ -297,7 +453,7 @@ async function collectTargets(): Promise<{ id: string; name: string }[]> {
       eps = await api.getEpisodes(props.item.Id, sid)
       episodesBySeason.value = { ...episodesBySeason.value, [sid]: eps }
     }
-    targets.push(...eps.map((ep) => ({ id: ep.Id, name: ep.Name })))
+    targets.push(...eps.map((ep) => ({ id: ep.Id, name: episodeLabel(ep) })))
   }
   return targets
 }
@@ -314,13 +470,19 @@ async function startDownload() {
     const audioBitrateNum = parseInt(selectedAudioBitrate.value) || undefined
     const isAudioCopy = selectedAudioCodec.value === 'copy'
 
+    const audioChannelsNum = parseInt(selectedAudioChannels.value)
+    const useCustomBitrate = selectedQualityPreset.value === 'Custom'
+
     const baseRequest: Omit<TranscodeJobRequest, 'itemId'> = {
       videoCodec: isOriginal ? 'copy' : videoCodec,
       containerFormat,
       ...(isOriginal ? {} : { maxWidth, maxHeight }),
-      ...(bitrateNum ? { videoBitrate: bitrateNum } : {}),
+      ...(useCustomBitrate && bitrateNum ? { videoBitrate: bitrateNum } : {}),
+      preset: selectedQualityPreset.value,
+      speedPreset: selectedSpeedPreset.value,
       audioCodec: selectedAudioCodec.value,
       ...(isAudioCopy ? {} : { audioBitrate: audioBitrateNum ?? 128_000 }),
+      ...(!isAudioCopy && audioChannelsNum > 0 ? { audioChannels: audioChannelsNum } : {}),
       audioStreamIndex: -1,
       subtitleStreamIndex: -1,
     }
@@ -534,11 +696,27 @@ async function startDownload() {
               </div>
 
               <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Quality Preset</label>
+                <select v-model="selectedQualityPreset" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition">
+                  <option v-for="q in qualityPresets" :key="q.value" :value="q.value">{{ q.label }}</option>
+                </select>
+                <p class="text-xs text-jellyfin-muted">{{ qualityPresets.find(q => q.value === selectedQualityPreset)?.description }}</p>
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Speed Preset</label>
+                <select v-model="selectedSpeedPreset" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition">
+                  <option v-for="s in speedPresets" :key="s.value" :value="s.value">{{ s.label }}</option>
+                </select>
+                <p class="text-xs text-jellyfin-muted">{{ speedPresets.find(s => s.value === selectedSpeedPreset)?.description }}</p>
+              </div>
+
+              <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Bitrate</label>
-                <select v-model="selectedBitrate" :disabled="selectedResolution === 'original'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
+                <select v-model="selectedBitrate" :disabled="selectedResolution === 'original' || selectedQualityPreset !== 'Custom'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
                   <option v-for="b in bitrates" :key="b.value" :value="b.value">{{ b.label }}</option>
                 </select>
-                <p class="text-xs text-jellyfin-muted">{{ bitrates.find(b => b.value === selectedBitrate)?.description }}</p>
+                <p class="text-xs text-jellyfin-muted">{{ selectedQualityPreset !== 'Custom' ? 'Controlled by quality preset' : bitrates.find(b => b.value === selectedBitrate)?.description }}</p>
               </div>
 
               <div class="space-y-1.5">
@@ -555,6 +733,14 @@ async function startDownload() {
                   <option v-for="ab in audioBitrates" :key="ab.value" :value="ab.value">{{ ab.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ audioBitrates.find(ab => ab.value === selectedAudioBitrate)?.description }}</p>
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Audio Channels</label>
+                <select v-model="selectedAudioChannels" :disabled="selectedAudioCodec === 'copy'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
+                  <option v-for="ch in audioChannels" :key="ch.value" :value="ch.value">{{ ch.label }}</option>
+                </select>
+                <p class="text-xs text-jellyfin-muted">{{ audioChannels.find(ch => ch.value === selectedAudioChannels)?.description }}</p>
               </div>
 
               <div class="space-y-1.5">

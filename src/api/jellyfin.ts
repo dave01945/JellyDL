@@ -65,16 +65,22 @@ export interface JellyfinEpisode {
   RunTimeTicks?: number
 }
 
+export type QualityPreset = 'Custom' | 'Low' | 'Medium' | 'High' | 'VeryHigh'
+export type SpeedPreset = 'Default' | 'Fastest' | 'VeryFast' | 'Fast' | 'Medium' | 'Slow' | 'VerySlow'
+
 export interface TranscodeJobRequest {
   itemId: string
   videoCodec: string
   containerFormat: string
   videoBitrate?: number
   crf?: number
+  preset?: QualityPreset
+  speedPreset?: SpeedPreset
   maxWidth?: number
   maxHeight?: number
   audioCodec: string
   audioBitrate?: number
+  audioChannels?: number
   audioStreamIndex?: number
   subtitleStreamIndex?: number
 }
@@ -266,13 +272,24 @@ export class JellyfinAPI {
    * Using the axios client ensures the `X-Proxy-Target` / `Authorization`
    * headers are sent in both dev and production modes.
    */
-  async downloadTranscodeFile(jobId: string): Promise<{ blob: Blob; filename: string }> {
+  async downloadTranscodeFile(
+    jobId: string,
+    onDownloadProgress?: (percent: number) => void,
+  ): Promise<{ blob: Blob; filename: string }> {
     const response = await this.client.get<Blob>(
       `/Plugins/TranscodeDownload/jobs/${jobId}/file`,
       {
         responseType: 'blob',
         // Large files can take longer than the default API timeout.
         timeout: 0,
+        onDownloadProgress: onDownloadProgress
+          ? (evt) => {
+              const total = evt.total ?? (evt.event as ProgressEvent)?.total ?? 0
+              const loaded = evt.loaded ?? 0
+              const percent = total > 0 ? Math.round((loaded / total) * 100) : -1
+              onDownloadProgress(percent)
+            }
+          : undefined,
       },
     )
     const disposition = response.headers['content-disposition'] as string | undefined
