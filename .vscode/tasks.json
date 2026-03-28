@@ -33,6 +33,90 @@
         "kind": "build",
         "isDefault": true
       }
+    },
+    {
+      "label": "JellyDL: Docker Build",
+      "type": "shell",
+      "command": "docker build -t ${input:imageRepo}:${input:imageVersion} -t ${input:imageRepo}:latest .",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "group": "build"
+    },
+    {
+      "label": "JellyDL: Build Web Assets",
+      "type": "shell",
+      "command": "npm run build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "JellyDL: GHCR Login",
+      "type": "shell",
+      "command": "sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; if [ -z \"$GHCR_TOKEN\" ]; then echo \"GHCR_TOKEN is not set (expected in .env).\"; exit 1; fi; docker_user=\"${GHCR_USERNAME:-${input:ghcrUsername}}\"; echo \"$GHCR_TOKEN\" | docker login ghcr.io -u \"$docker_user\" --password-stdin'",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "JellyDL: Docker Push",
+      "type": "shell",
+      "command": "sh -c 'docker push ${input:imageRepo}:${input:imageVersion} && docker push ${input:imageRepo}:latest'",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "JellyDL: Full Build Login Push",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "JellyDL: Build Web Assets",
+        "JellyDL: Docker Build",
+        "JellyDL: GHCR Login",
+        "JellyDL: Docker Push"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "imageRepo",
+      "type": "promptString",
+      "description": "Docker image repository",
+      "default": "ghcr.io/dave01945/jellydl"
+    },
+    {
+      "id": "imageVersion",
+      "type": "promptString",
+      "description": "Docker image version tag",
+      "default": "v1.0.0"
+    },
+    {
+      "id": "ghcrUsername",
+      "type": "promptString",
+      "description": "GitHub username for ghcr.io login",
+      "default": "dave01945"
     }
   ]
 }

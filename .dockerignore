@@ -1,0 +1,27 @@
+# Dependencies (reinstalled during build)
+node_modules/
+
+# Version control
+.git/
+.gitignore
+
+# Local env files (never bake secrets into the image)
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.suo
+.DS_Store
+Thumbs.db
+
+# Docker files themselves (not needed inside the image)
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+npm-debug.log*

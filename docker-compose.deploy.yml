@@ -1,0 +1,14 @@
+# Deployment-only compose file for the remote machine.
+# No build context — pulls the pre-built image from GHCR.
+#
+# Usage:
+#   docker compose -f docker-compose.deploy.yml up -d
+#   docker compose -f docker-compose.deploy.yml pull   # update to latest
+
+services:
+  jellydl:
+    image: ghcr.io/dave01945/jellydl:latest
+    container_name: jellydl
+    ports:
+      - "8080:80"
+    restart: unless-stopped
