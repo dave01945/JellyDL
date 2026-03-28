@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { QualityPreset, SpeedPreset } from '@/api/jellyfin'
 
-const STORAGE_KEY = 'jellyfindl_settings'
+const STORAGE_KEY = 'jellyfindl_settings_v2'
 
 interface PersistedSettings {
   jellyfinUrl: string
@@ -18,7 +18,7 @@ function loadFromStorage(): PersistedSettings {
     // ignore corrupt storage
   }
   return {
-    jellyfinUrl: import.meta.env.VITE_JELLYFIN_URL ?? '',
+    jellyfinUrl: '',
     defaultSpeedPreset: 'Default',
     defaultQualityPreset: 'Custom',
   }

@@ -48,10 +48,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(usernameInput: string, password: string): Promise<boolean> {
     const settings = useSettingsStore()
-    if (!settings.jellyfinUrl) {
-      error.value = 'Jellyfin server URL is not configured. Go to Settings first.'
-      return false
-    }
 
     loading.value = true
     error.value = null

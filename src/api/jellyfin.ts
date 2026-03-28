@@ -63,6 +63,13 @@ export interface JellyfinEpisode {
   IndexNumber?: number
   ParentIndexNumber?: number
   RunTimeTicks?: number
+  fileSize?: number
+  sourceWidth?: number
+  sourceHeight?: number
+  sourceVideoBitrate?: number
+  sourceTotalBitrate?: number
+  sourceAudioChannels?: number
+  sourceAudioBitrate?: number
 }
 
 export type QualityPreset = 'Custom' | 'Low' | 'Medium' | 'High' | 'VeryHigh'
@@ -109,11 +116,22 @@ export class JellyfinAPI {
     // Normalise: strip trailing slash
     this.baseUrl = baseUrl.replace(/\/+$/, '')
 
-    // In dev mode, route all requests through the Vite server-side proxy to
-    // avoid browser CORS restrictions. The real target URL is passed via header.
+    // Routing strategy:
+    //   - blank URL  → proxy mode: route through /jellyfin (nginx in prod, Vite proxy in dev)
+    //   - URL set + dev → /dev-proxy with X-Proxy-Target header to bypass browser CORS
+    //   - URL set + prod → direct requests to the configured URL
     const isDev = import.meta.env.DEV
-    const baseURL = isDev ? '/dev-proxy' : this.baseUrl
-    const extraHeaders = isDev ? { 'X-Proxy-Target': this.baseUrl } : {}
+    let baseURL: string
+    let extraHeaders: Record<string, string> = {}
+
+    if (!this.baseUrl) {
+      baseURL = '/jellyfin'
+    } else if (isDev) {
+      baseURL = '/dev-proxy'
+      extraHeaders = { 'X-Proxy-Target': this.baseUrl }
+    } else {
+      baseURL = this.baseUrl
+    }
 
     this.client = axios.create({
       baseURL,
@@ -159,16 +177,40 @@ export class JellyfinAPI {
   /** Return episodes for a series, optionally filtered to one season */
   async getEpisodes(seriesId: string, seasonId?: string): Promise<JellyfinEpisode[]> {
     const params: Record<string, string | number> = {
-      Fields: 'RunTimeTicks',
+      Fields: 'RunTimeTicks,MediaSources',
       EnableImageTypes: 'none',
       Limit: 500,
     }
     if (seasonId) params.SeasonId = seasonId
-    const response = await this.client.get<{ Items: JellyfinEpisode[] }>(
+    type RawMediaSource = {
+      Size?: number
+      Bitrate?: number
+      MediaStreams?: Array<{ Type: string; BitRate?: number; Width?: number; Height?: number; Channels?: number }>
+    }
+    type RawEpisode = JellyfinEpisode & { MediaSources?: RawMediaSource[] }
+    const response = await this.client.get<{ Items: RawEpisode[] }>(
       `/Shows/${seriesId}/Episodes`,
       { params }
     )
-    return response.data.Items ?? []
+    return (response.data.Items ?? []).map(item => {
+      const src = item.MediaSources?.[0]
+      const videoStream = src?.MediaStreams?.find(s => s.Type === 'Video')
+      const audioStream = src?.MediaStreams?.find(s => s.Type === 'Audio')
+      return {
+        Id: item.Id,
+        Name: item.Name,
+        IndexNumber: item.IndexNumber,
+        ParentIndexNumber: item.ParentIndexNumber,
+        RunTimeTicks: item.RunTimeTicks,
+        fileSize: src?.Size,
+        sourceWidth: videoStream?.Width,
+        sourceHeight: videoStream?.Height,
+        sourceVideoBitrate: videoStream?.BitRate,
+        sourceTotalBitrate: src?.Bitrate,
+        sourceAudioChannels: audioStream?.Channels,
+        sourceAudioBitrate: audioStream?.BitRate,
+      }
+    })
   }
 
   /** Return items inside a library folder */
@@ -190,6 +232,54 @@ export class JellyfinAPI {
       },
     })
     return response.data.Items ?? []
+  }
+
+  /**
+   * Return source media info for an item — used to cap transcode output so the
+   * result is always smaller / lower quality than the original.
+   * Returns null fields if the info cannot be fetched.
+   */
+  async getItemVideoInfo(itemId: string, userId: string): Promise<{
+    videoBitrate: number | null
+    totalBitrate: number | null
+    width: number | null
+    height: number | null
+    audioChannels: number | null
+    audioBitrate: number | null
+    size: number | null
+  }> {
+    try {
+      const response = await this.client.get<{
+        MediaSources?: Array<{
+          Bitrate?: number
+          Size?: number
+          MediaStreams?: Array<{
+            Type: string
+            BitRate?: number
+            Width?: number
+            Height?: number
+            Channels?: number
+          }>
+        }>
+      }>(`/Users/${userId}/Items/${itemId}`, {
+        params: { Fields: 'MediaSources' },
+      })
+      const source = response.data.MediaSources?.[0]
+      if (!source) return { videoBitrate: null, totalBitrate: null, width: null, height: null, audioChannels: null, audioBitrate: null, size: null }
+      const videoStream = source.MediaStreams?.find(s => s.Type === 'Video')
+      const audioStream = source.MediaStreams?.find(s => s.Type === 'Audio')
+      return {
+        videoBitrate: videoStream?.BitRate ?? null,
+        totalBitrate: source.Bitrate ?? null,
+        width: videoStream?.Width ?? null,
+        height: videoStream?.Height ?? null,
+        audioChannels: audioStream?.Channels ?? null,
+        audioBitrate: audioStream?.BitRate ?? null,
+        size: source.Size ?? null,
+      }
+    } catch {
+      return { videoBitrate: null, totalBitrate: null, width: null, height: null, audioChannels: null, audioBitrate: null, size: null }
+    }
   }
 
   // ─── Transcode Download ────────────────────────────────────────────────────
@@ -239,6 +329,11 @@ export class JellyfinAPI {
    */
   getTranscodeFileUrl(jobId: string, token?: string): string {
     const path = `/Plugins/TranscodeDownload/jobs/${jobId}/file`
+    if (!this.baseUrl) {
+      // Proxy mode: /jellyfin prefix, api_key for auth (no custom headers possible on direct links)
+      const base = `/jellyfin${path}`
+      return token ? `${base}?api_key=${token}` : base
+    }
     if (import.meta.env.DEV) {
       return `/dev-proxy${path}`
     }
@@ -258,9 +353,16 @@ export class JellyfinAPI {
     if (preferredFileName) params.set('name', preferredFileName)
     const query = params.toString()
 
-    // In dev, prefer same-origin Vite proxy URL so browser honors the
-    // `<a download>` filename instead of falling back to URL path names.
-    const base = import.meta.env.DEV ? `/api${path}` : `${this.baseUrl}${path}`
+    // Proxy mode uses /jellyfin prefix so the nginx reverse proxy handles auth forwarding.
+    // In URL-override dev mode, use the configured Jellyfin origin directly with api_key;
+    // this avoids depending on VITE_JELLYFIN_URL (/api proxy), which may differ from
+    // the runtime server configured in app settings.
+    let base: string
+    if (!this.baseUrl) {
+      base = `/jellyfin${path}`
+    } else {
+      base = `${this.baseUrl}${path}`
+    }
     return query ? `${base}?${query}` : base
   }
 
@@ -306,12 +408,14 @@ export class JellyfinAPI {
    * Jellyfin serves images without authentication by default.
    */
   getPrimaryImageUrl(itemId: string, height = 450): string {
-    return `${this.baseUrl}/Items/${itemId}/Images/Primary?fillHeight=${height}&quality=96`
+    const origin = this.baseUrl || '/jellyfin'
+    return `${origin}/Items/${itemId}/Images/Primary?fillHeight=${height}&quality=96`
   }
 
   /** Return a backdrop image URL */
   getBackdropImageUrl(itemId: string): string {
-    return `${this.baseUrl}/Items/${itemId}/Images/Backdrop?fillWidth=1280&quality=80`
+    const origin = this.baseUrl || '/jellyfin'
+    return `${origin}/Items/${itemId}/Images/Backdrop?fillWidth=1280&quality=80`
   }
 }
 

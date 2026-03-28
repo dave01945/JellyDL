@@ -124,6 +124,13 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
+        // Proxy for /jellyfin/* — mirrors the nginx reverse proxy used in production.
+        // Rewrites the prefix and forwards to VITE_JELLYFIN_URL.
+        '/jellyfin': {
+          target: jellyfinTarget,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/jellyfin/, ''),
+        },
         '/api': {
           target: jellyfinTarget,
           changeOrigin: true,

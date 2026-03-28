@@ -2,11 +2,13 @@
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
+import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const queue = useQueueStore()
+const settings = useSettingsStore()
 
 function logout() {
   auth.logout()
@@ -67,6 +69,10 @@ function logout() {
               v-if="queue.activeCount > 0"
               class="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center bg-jellyfin-primary text-white text-[10px] font-bold rounded-full px-1 leading-none"
             >{{ queue.activeCount }}</span>
+            <span
+              v-if="queue.completedCount > 0"
+              class="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center bg-green-500 text-white text-[10px] font-bold rounded-full px-1 leading-none"
+            >{{ queue.completedCount }}</span>
           </RouterLink>
 
           <RouterLink
@@ -88,6 +94,34 @@ function logout() {
 
         <!-- Right side: Settings + User -->
         <div class="flex items-center gap-3">
+          <!-- Link to Jellyfin web UI -->
+          <a
+            v-if="settings.jellyfinUrl"
+            :href="settings.jellyfinUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="p-2 rounded-md text-jellyfin-muted hover:text-jellyfin-text hover:bg-white/5 transition-colors"
+            title="Open Jellyfin"
+          >
+            <!-- Jellyfin icon mark -->
+            <svg class="w-8 h-8" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <linearGradient id="jellyfinMarkGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#b85ad9"/>
+                  <stop offset="1" stop-color="#00a4dc"/>
+                </linearGradient>
+              </defs>
+              <path
+                fill="url(#jellyfinMarkGrad)"
+                d="M12 2.6c-.7 0-1.4.3-1.9.9L3.8 11.6c-.8 1-.4 2.5.8 3.1l6.3 3c.7.3 1.5.3 2.2 0l6.3-3c1.2-.6 1.6-2.1.8-3.1l-6.3-8.1c-.5-.6-1.2-.9-1.9-.9z"
+              />
+              <path
+                fill="#081226"
+                d="M12 7.3c-.4 0-.7.2-1 .5l-3 3.9c-.4.5-.2 1.2.4 1.5l3 1.4c.4.2.8.2 1.2 0l3-1.4c.6-.3.8-1 .4-1.5l-3-3.9c-.3-.3-.6-.5-1-.5z"
+              />
+            </svg>
+          </a>
+
           <RouterLink
             to="/settings"
             :class="[

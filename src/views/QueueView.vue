@@ -81,7 +81,6 @@ function formatEta(job: QueueEntry): string {
 // ─── Download ─────────────────────────────────────────────────────────────────
 
 const savingJobs = ref(new Set<string>())
-const downloadPercent = ref(new Map<string, number>())
 
 function getSuggestedDownloadName(job: QueueEntry): string {
   const rawName = (job.itemName || job.itemId || 'download').trim()
@@ -93,27 +92,25 @@ function getSuggestedDownloadName(job: QueueEntry): string {
 async function saveFile(job: QueueEntry) {
   if (savingJobs.value.has(job.jobId)) return
   savingJobs.value = new Set([...savingJobs.value, job.jobId])
-  downloadPercent.value = new Map([...downloadPercent.value, [job.jobId, 0]])
   try {
     const api = auth.getApiClient()
-    const { blob, filename } = await api.downloadTranscodeFile(job.jobId, (pct) => {
-      downloadPercent.value = new Map([...downloadPercent.value, [job.jobId, pct]])
-    })
-    const url = URL.createObjectURL(blob)
+    const filename = getSuggestedDownloadName(job)
+    const url = api.getBrowserTranscodeFileUrl(job.jobId, auth.token ?? undefined, filename)
     const a = document.createElement('a')
     a.href = url
-    a.download = getSuggestedDownloadName(job) || filename
+    a.download = filename
+    // Use a new tab/window so the app doesn't navigate away if the server replies inline.
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(url)
   } finally {
+    // Keep transient "Saving..." state briefly for user feedback.
+    await new Promise((resolve) => setTimeout(resolve, 800))
     const nextSaving = new Set(savingJobs.value)
     nextSaving.delete(job.jobId)
     savingJobs.value = nextSaving
-    const nextPct = new Map(downloadPercent.value)
-    nextPct.delete(job.jobId)
-    downloadPercent.value = nextPct
   }
 }
 </script>
@@ -160,6 +157,7 @@ async function saveFile(job: QueueEntry) {
         <!-- Row 1: item name + state badge + actions -->
         <div class="flex items-start gap-3">
           <div class="flex-1 min-w-0">
+            <p v-if="job.seriesName" class="text-xs text-jellyfin-muted truncate">{{ job.seriesName }}</p>
             <p class="font-semibold text-jellyfin-text truncate">{{ job.itemName || job.itemId }}</p>
             <p class="text-xs text-jellyfin-muted mt-0.5 font-mono uppercase tracking-wide">
               {{ job.containerFormat }}
@@ -242,33 +240,20 @@ async function saveFile(job: QueueEntry) {
 
         <!-- Completed: file size -->
         <p
-          v-if="job.state === 'Completed' && job.outputSizeBytes && !savingJobs.has(job.jobId)"
+          v-if="job.state === 'Completed' && !savingJobs.has(job.jobId)"
           class="text-xs text-green-400"
         >
-          {{ formatBytes(job.outputSizeBytes) }} ready to download
+          <template v-if="job.sourceFileSizeBytes && job.outputSizeBytes">
+            {{ formatBytes(job.sourceFileSizeBytes) }} → {{ formatBytes(job.outputSizeBytes) }} ready to download
+          </template>
+          <template v-else-if="job.outputSizeBytes">
+            {{ formatBytes(job.outputSizeBytes) }} ready to download
+          </template>
         </p>
 
-        <!-- Download progress bar -->
+        <!-- Download starting state -->
         <div v-if="savingJobs.has(job.jobId)" class="space-y-1">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-jellyfin-muted">Downloading…</span>
-            <span class="font-medium text-green-400 tabular-nums">
-              {{ downloadPercent.get(job.jobId) === -1 ? '' : `${downloadPercent.get(job.jobId) ?? 0}%` }}
-            </span>
-          </div>
-          <div class="h-1.5 bg-jellyfin-bg rounded-full overflow-hidden">
-            <!-- Determinate -->
-            <div
-              v-if="(downloadPercent.get(job.jobId) ?? -1) >= 0"
-              class="h-full bg-green-500 rounded-full transition-all duration-300"
-              :style="{ width: `${Math.max(2, downloadPercent.get(job.jobId) ?? 0)}%` }"
-            />
-            <!-- Indeterminate: server didn't send Content-Length -->
-            <div
-              v-else
-              class="h-full w-1/3 bg-green-500/50 rounded-full animate-pulse"
-            />
-          </div>
+          <p class="text-xs text-jellyfin-muted">Starting browser download…</p>
         </div>
 
         <!-- Failed: error message -->

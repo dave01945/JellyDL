@@ -60,6 +60,11 @@ const audioBitrates = [
   { value: '192000', label: '192 kbps', description: 'High quality' },
   { value: '256000', label: '256 kbps', description: 'Very high quality' },
   { value: '320000', label: '320 kbps', description: 'Near transparent quality' },
+  { value: '448000', label: '448 kbps', description: 'AC3 5.1 ceiling' },
+  { value: '640000', label: '640 kbps', description: 'E-AC3 / DTS core ceiling' },
+  { value: '768000', label: '768 kbps', description: 'High-res 5.1 / DTS-HD' },
+  { value: '1024000', label: '1024 kbps', description: 'High-res 7.1' },
+  { value: '1536000', label: '1536 kbps', description: 'True HD / DTS-HD MA 7.1 ceiling' },
 ]
 
 const audioChannels = [
@@ -298,9 +303,54 @@ async function loadSeasons() {
   try {
     const api = auth.getApiClient()
     seasons.value = await api.getSeasons(props.item.Id)
-    if (seasons.value.length > 0) selectedSeasonId.value = seasons.value[0].Id
+    if (seasons.value.length > 0) {
+      selectedSeasonId.value = seasons.value[0].Id
+      // Kick off source info fetch so the dropdowns are filtered from the start.
+      loadTvSourceInfo(seasons.value[0].Id)
+    }
   } finally {
     seasonsLoading.value = false
+  }
+}
+
+/**
+ * Derive a minimum-quality SourceInfo composite from a set of episodes.
+ * Uses the worst-case value for each metric so that all dropdowns show only options
+ * valid for every episode in the selection (prevents upscaling surprises).
+ */
+function deriveSourceInfoFromEpisodes(eps: JellyfinEpisode[]): SourceInfo | null {
+  const withData = eps.filter(ep => ep.sourceWidth || ep.sourceHeight || ep.sourceVideoBitrate)
+  if (withData.length === 0) return null
+
+  const minNonNull = (vals: (number | undefined)[]): number | null => {
+    const valid = vals.filter((v): v is number => v !== undefined && v > 0)
+    return valid.length ? Math.min(...valid) : null
+  }
+
+  return {
+    width: minNonNull(withData.map(ep => ep.sourceWidth)),
+    height: minNonNull(withData.map(ep => ep.sourceHeight)),
+    videoBitrate: minNonNull(withData.map(ep => ep.sourceVideoBitrate)),
+    totalBitrate: minNonNull(withData.map(ep => ep.sourceTotalBitrate)),
+    audioChannels: minNonNull(withData.map(ep => ep.sourceAudioChannels)),
+    audioBitrate: minNonNull(withData.map(ep => ep.sourceAudioBitrate)),
+    size: null,
+  }
+}
+
+/** Load episodes for a season (if not already cached) and derive source info for dropdown filtering. */
+async function loadTvSourceInfo(seasonId: string) {
+  if (!seasonId) return
+  try {
+    const api = auth.getApiClient()
+    let eps = episodesBySeason.value[seasonId]
+    if (!eps) {
+      eps = await api.getEpisodes(props.item.Id, seasonId)
+      episodesBySeason.value = { ...episodesBySeason.value, [seasonId]: eps }
+    }
+    sourceInfo.value = deriveSourceInfoFromEpisodes(eps)
+  } catch {
+    // non-critical — options won't be filtered
   }
 }
 
@@ -357,6 +407,18 @@ function formatRuntime(ticks?: number): string {
 
 watch(scope, (val) => {
   if (val !== 'series' && props.item.Type === 'Series') loadSeasons()
+  if (props.item.Type !== 'Series') return
+  // Refresh source info to match the newly active scope
+  if (val === 'episodes') {
+    const selected = Object.values(episodesBySeason.value)
+      .flat()
+      .filter(ep => selectedEpisodeIds.value.has(ep.Id))
+    sourceInfo.value = selected.length > 0 ? deriveSourceInfoFromEpisodes(selected) : null
+  } else if (val === 'season' && selectedSeasonId.value) {
+    loadTvSourceInfo(selectedSeasonId.value)
+  } else if (val === 'series' && seasons.value.length > 0) {
+    loadTvSourceInfo(seasons.value[0].Id)
+  }
 })
 
 watch(selectedResolution, (val) => {
@@ -372,8 +434,167 @@ watch(selectedResolution, (val) => {
   selectedBitrate.value = recommendedByResolution[val] ?? '0'
 })
 
-onMounted(() => {
+// ─── Source file size & option filtering ─────────────────────────────────────
+
+interface SourceInfo {
+  videoBitrate: number | null
+  totalBitrate: number | null
+  width: number | null
+  height: number | null
+  audioChannels: number | null
+  audioBitrate: number | null
+  size: number | null
+}
+
+const sourceInfo = ref<SourceInfo | null>(null)
+
+/**
+ * Total source file size for the current selection.
+ * - Movie: the single file size from sourceInfo.
+ * - TV episodes scope: sum of fileSize for all selected episodes.
+ * - TV season scope: sum of fileSize for all episodes in the selected season.
+ * - TV series scope: not shown (too many episodes to pre-load reliably).
+ */
+const sourceFileSize = computed((): number | null => {
+  if (props.item.Type !== 'Series') return sourceInfo.value?.size ?? null
+
+  if (scope.value === 'episodes') {
+    const selected = Object.values(episodesBySeason.value)
+      .flat()
+      .filter(ep => selectedEpisodeIds.value.has(ep.Id))
+    if (selected.length === 0 || selected.every(ep => !ep.fileSize)) return null
+    return selected.reduce((sum, ep) => sum + (ep.fileSize ?? 0), 0)
+  }
+
+  if (scope.value === 'season') {
+    const eps = episodesBySeason.value[selectedSeasonId.value]
+    if (!eps || eps.every(ep => !ep.fileSize)) return null
+    return eps.reduce((sum, ep) => sum + (ep.fileSize ?? 0), 0)
+  }
+
+  // series scope — would need all seasons loaded; skip to avoid partial totals
+  return null
+})
+
+const sourceSizeLabel = computed(() => {
+  if (props.item.Type !== 'Series') return 'Original size:'
+  if (scope.value === 'episodes') return 'Selected source size:'
+  return 'Season source size:'
+})
+
+function toExactSize(bytes: number): string {
+  const gb = bytes / 1_073_741_824
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1_048_576).toFixed(0)} MB`
+}
+
+// Height in pixels for each named resolution preset.
+const resolutionHeightMap: Record<string, number> = {
+  '4k': 2160, '1080p': 1080, '720p': 720, '480p': 480, '360p': 360,
+}
+
+// Only show resolutions that don't exceed the source dimensions (no upscaling).
+const availableResolutions = computed(() => {
+  const srcH = sourceInfo.value?.height
+  if (!srcH) return resolutions
+  return resolutions.filter(r => r.value === 'original' || (resolutionHeightMap[r.value] ?? 0) <= srcH)
+})
+
+// Only show audio bitrate options at or below the source stream's bitrate.
+const availableAudioBitrates = computed(() => {
+  const srcBps = sourceInfo.value?.audioBitrate
+  if (!srcBps) return audioBitrates
+  return audioBitrates.filter(ab => parseInt(ab.value) <= srcBps)
+})
+
+// Only show video bitrate options at or below the source video bitrate.
+// The '0' (Auto) entry is always kept so the encoder can decide.
+const availableVideoBitrates = computed(() => {
+  const srcBps = sourceInfo.value?.videoBitrate ?? sourceInfo.value?.totalBitrate
+  if (!srcBps) return bitrates
+  return bitrates.filter(b => b.value === '0' || parseInt(b.value) <= srcBps)
+})
+
+// Only show channel layouts at or below the source channel count.
+const availableAudioChannels = computed(() => {
+  const srcCh = sourceInfo.value?.audioChannels
+  if (!srcCh) return audioChannels
+  return audioChannels.filter(ch => ch.value === '0' || parseInt(ch.value) <= srcCh)
+})
+
+// When source info loads, snap any current selections that exceed the source down
+// to the highest available option that fits.
+watch(sourceInfo, (info) => {
+  if (!info) return
+
+  const srcH = info.height
+  if (srcH) {
+    const curH = resolutionHeightMap[selectedResolution.value]
+    if (curH && curH > srcH) {
+      const best = Object.entries(resolutionHeightMap)
+        .filter(([, h]) => h <= srcH)
+        .sort(([, a], [, b]) => b - a)[0]
+      selectedResolution.value = best ? best[0] : 'original'
+    }
+  }
+
+  const srcAudioBps = info.audioBitrate
+  if (srcAudioBps) {
+    const cur = parseInt(selectedAudioBitrate.value)
+    if (cur > srcAudioBps) {
+      const best = [...audioBitrates].reverse().find(ab => parseInt(ab.value) <= srcAudioBps)
+      if (best) selectedAudioBitrate.value = best.value
+    }
+  }
+
+  const srcVideoBps = info.videoBitrate ?? info.totalBitrate
+  if (srcVideoBps) {
+    const cur = parseInt(selectedBitrate.value)
+    if (cur > 0 && cur > srcVideoBps) {
+      const best = [...bitrates].reverse().find(b => b.value !== '0' && parseInt(b.value) <= srcVideoBps)
+      selectedBitrate.value = best ? best.value : '0'
+    }
+  }
+
+  const srcCh = info.audioChannels
+  if (srcCh) {
+    const cur = parseInt(selectedAudioChannels.value)
+    if (cur > 0 && cur > srcCh) {
+      const best = [...audioChannels].reverse().find(ch => ch.value !== '0' && parseInt(ch.value) <= srcCh)
+      selectedAudioChannels.value = best ? best.value : '0'
+    }
+  }
+})
+
+// For TV shows: when the selected season changes, refresh source info from that season's episodes.
+watch(selectedSeasonId, (seasonId) => {
+  if (!seasonId || props.item.Type !== 'Series') return
+  // In episodes scope the selection drives source info, not the season
+  if (scope.value !== 'episodes') loadTvSourceInfo(seasonId)
+})
+
+// When in episodes scope, recompute source info from the current selection so that
+// dropdown options stay limited to what is valid for every selected episode.
+watch(selectedEpisodeIds, () => {
+  if (props.item.Type !== 'Series' || scope.value !== 'episodes') return
+  const selected = Object.values(episodesBySeason.value)
+    .flat()
+    .filter(ep => selectedEpisodeIds.value.has(ep.Id))
+  sourceInfo.value = selected.length > 0 ? deriveSourceInfoFromEpisodes(selected) : null
+})
+
+onMounted(async () => {
   if (props.item.Type === 'Series') loadSeasons()
+
+  // For movies, fetch the source media info immediately to filter available options.
+  // For TV shows, source info is loaded per-season via loadTvSourceInfo (called from loadSeasons).
+  if (props.item.Type !== 'Series') {
+    try {
+      const api = auth.getApiClient()
+      sourceInfo.value = await api.getItemVideoInfo(props.item.Id, auth.userId!)
+    } catch {
+      // non-critical — options won't be filtered and size won't be shown
+    }
+  }
 })
 
 function onBackdropClick(e: MouseEvent) {
@@ -493,11 +714,61 @@ async function startDownload() {
       return
     }
 
+    const api = auth.getApiClient()
     const errors: string[] = []
     await Promise.all(
       targets.map(async ({ id, name }) => {
         try {
-          await queue.enqueueItem(id, name, { ...baseRequest, itemId: id })
+          let request: TranscodeJobRequest = { ...baseRequest, itemId: id }
+
+          // Fetch source media info to enforce ceilings (output must be <= source).
+          // Skip for copy-video jobs since there is no re-encode to constrain.
+          if (request.videoCodec !== 'copy') {
+            const src = await api.getItemVideoInfo(id, auth.userId!)
+
+            // ── Video bitrate ceiling ────────────────────────────────────────
+            const srcBitrate = src.videoBitrate ?? src.totalBitrate ?? null
+            if (srcBitrate) {
+              request = {
+                ...request,
+                videoBitrate: request.videoBitrate
+                  ? Math.min(request.videoBitrate, srcBitrate)
+                  : srcBitrate,
+              }
+            }
+
+            // ── Resolution ceiling ──────────────────────────────────────────
+            // Never upscale: if the requested dimensions exceed the source, drop
+            // the constraint so the encoder keeps the source dimensions.
+            if (src.width && src.height) {
+              const reqW = request.maxWidth ?? Infinity
+              const reqH = request.maxHeight ?? Infinity
+              if (reqW > src.width || reqH > src.height) {
+                // Requested resolution is larger than source — remove the cap so
+                // the encoder outputs at source resolution instead of upscaling.
+                const { maxWidth: _w, maxHeight: _h, ...rest } = request
+                request = rest as TranscodeJobRequest
+              }
+            }
+
+            // ── Audio channel ceiling ────────────────────────────────────────
+            if (src.audioChannels && request.audioChannels) {
+              request = {
+                ...request,
+                audioChannels: Math.min(request.audioChannels, src.audioChannels),
+              }
+            }
+
+            // ── Audio bitrate ceiling ────────────────────────────────────────
+            if (src.audioBitrate && request.audioBitrate) {
+              request = {
+                ...request,
+                audioBitrate: Math.min(request.audioBitrate, src.audioBitrate),
+              }
+            }
+          }
+
+          await queue.enqueueItem(id, name, request, props.item.Type === 'Series' ? props.item.Name : null)
         } catch (err: unknown) {
           const msg = (err as { message?: string })?.message ?? 'Unknown error'
           errors.push(`${name}: ${msg}`)
@@ -690,7 +961,7 @@ async function startDownload() {
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Resolution</label>
                 <select v-model="selectedResolution" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition">
-                  <option v-for="r in resolutions" :key="r.value" :value="r.value">{{ r.label }}</option>
+                  <option v-for="r in availableResolutions" :key="r.value" :value="r.value">{{ r.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ resolutions.find(r => r.value === selectedResolution)?.description }}</p>
               </div>
@@ -714,7 +985,7 @@ async function startDownload() {
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Bitrate</label>
                 <select v-model="selectedBitrate" :disabled="selectedResolution === 'original' || selectedQualityPreset !== 'Custom'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
-                  <option v-for="b in bitrates" :key="b.value" :value="b.value">{{ b.label }}</option>
+                  <option v-for="b in availableVideoBitrates" :key="b.value" :value="b.value">{{ b.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ selectedQualityPreset !== 'Custom' ? 'Controlled by quality preset' : bitrates.find(b => b.value === selectedBitrate)?.description }}</p>
               </div>
@@ -730,7 +1001,7 @@ async function startDownload() {
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Audio Bitrate</label>
                 <select v-model="selectedAudioBitrate" :disabled="selectedAudioCodec === 'copy'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
-                  <option v-for="ab in audioBitrates" :key="ab.value" :value="ab.value">{{ ab.label }}</option>
+                  <option v-for="ab in availableAudioBitrates" :key="ab.value" :value="ab.value">{{ ab.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ audioBitrates.find(ab => ab.value === selectedAudioBitrate)?.description }}</p>
               </div>
@@ -738,7 +1009,7 @@ async function startDownload() {
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Audio Channels</label>
                 <select v-model="selectedAudioChannels" :disabled="selectedAudioCodec === 'copy'" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition disabled:opacity-50">
-                  <option v-for="ch in audioChannels" :key="ch.value" :value="ch.value">{{ ch.label }}</option>
+                  <option v-for="ch in availableAudioChannels" :key="ch.value" :value="ch.value">{{ ch.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ audioChannels.find(ch => ch.value === selectedAudioChannels)?.description }}</p>
               </div>
@@ -752,9 +1023,15 @@ async function startDownload() {
 
             </div>
 
-            <div class="flex items-center justify-between text-sm text-jellyfin-muted border-t border-jellyfin-border pt-4">
-              <span>Estimated size:</span>
-              <span class="font-semibold text-jellyfin-text">{{ estimatedSize }}</span>
+            <div class="border-t border-jellyfin-border pt-4 space-y-1.5">
+              <div v-if="sourceFileSize !== null" class="flex items-center justify-between text-sm text-jellyfin-muted">
+                <span>{{ sourceSizeLabel }}</span>
+                <span class="font-semibold text-jellyfin-text">{{ toExactSize(sourceFileSize) }}</span>
+              </div>
+              <div class="flex items-center justify-between text-sm text-jellyfin-muted">
+                <span>Estimated size:</span>
+                <span class="font-semibold text-jellyfin-text">{{ estimatedSize }}</span>
+              </div>
             </div>
 
             <!-- Submit error -->

@@ -2,12 +2,10 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
-const settings = useSettingsStore()
 
 const username = ref('')
 const password = ref('')
@@ -48,21 +46,6 @@ async function handleLogin() {
           </span>
         </div>
         <p class="mt-2 text-sm text-jellyfin-muted">Sign in with your Jellyfin account</p>
-      </div>
-
-      <!-- No-URL warning -->
-      <div
-        v-if="!settings.jellyfinUrl"
-        class="mb-4 flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-sm text-amber-400"
-      >
-        <svg class="w-4 h-4 mt-0.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-        </svg>
-        <span>
-          No Jellyfin server URL configured.
-          <RouterLink to="/settings" class="underline hover:text-amber-300">Go to Settings</RouterLink>
-          to set it up first.
-        </span>
       </div>
 
       <!-- Login form -->

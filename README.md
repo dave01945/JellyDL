@@ -8,6 +8,7 @@ Vue 3 + Vite web UI for browsing Jellyfin media and managing download/transcode 
 - npm 10+
 - Docker
 - VS Code (optional, for task automation)
+- **Jellyfin plugin: [TranscodeDownload](https://github.com/dave01945/Jellyfin.Plugin.TranscodeDownload)** — required on your Jellyfin server for the transcode/download API endpoints used by this UI
 
 ## Local Development
 
@@ -27,6 +28,36 @@ Build production assets:
 
 ```bash
 npm run build
+```
+
+## Configuration
+
+### Jellyfin Internal URL (Docker)
+
+JellyDL proxies all Jellyfin API calls through a `/jellyfin/` route on the nginx server. This lets the container reach Jellyfin using its **internal Docker network address**, with no CORS issues and no need for clients to have a direct route to Jellyfin.
+
+Set `JELLYFIN_INTERNAL_URL` in your compose file (or as a Docker environment variable) to point at your Jellyfin instance:
+
+```yaml
+environment:
+  JELLYFIN_INTERNAL_URL: http://jellyfin:8096
+```
+
+The nginx config is a template (`nginx.conf.template`). The official `nginx:alpine` image automatically runs `envsubst` on it at container startup, so no custom entrypoint is needed.
+
+### Jellyfin URL — optional override (Settings page)
+
+The **Server URL** field in the Settings page is optional:
+
+- **Leave blank** (recommended): all Jellyfin API calls go through the `/jellyfin` proxy. This is the default behaviour and works out of the box with Docker Compose.
+- **Fill in a URL** (e.g. `http://192.168.1.100:8096`): API calls go directly to that address. Use this for direct access scenarios where the proxy isn't available.
+
+### Development
+
+Copy `.env.example` to `.env` and set `VITE_JELLYFIN_URL` to your Jellyfin server. The Vite dev server maps both `/jellyfin/*` and `/api/*` to that URL, mirroring the production nginx proxy.
+
+```env
+VITE_JELLYFIN_URL=http://192.168.1.100:8096
 ```
 
 ## Docker
@@ -71,21 +102,17 @@ docker compose -f docker-compose.deploy.yml up -d
 ## Publish to GHCR
 
 1. Create a GitHub PAT with `write:packages` scope.
-2. Add credentials to a local `.env` file in project root.
+2. Add credentials and image details to a local `.env` file in project root.
 
 Example `.env`:
 
 ```env
-GHCR_TOKEN=your_github_pat_here
+IMAGE_REPO=ghcr.io/dave01945/jellydl
 GHCR_USERNAME=dave01945
+GHCR_TOKEN=your_github_pat_here
 ```
 
-Manual login + push:
-
-```bash
-docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin <<< "$GHCR_TOKEN"
-docker push ghcr.io/dave01945/jellydl:latest
-```
+The VS Code build/push tasks source `.env` automatically, so no prompts are shown for the registry or username.
 
 ## VS Code Tasks
 

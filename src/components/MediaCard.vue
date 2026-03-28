@@ -23,9 +23,19 @@ function formatRuntime(ticks?: number): string {
 }
 
 function posterUrl(id: string): string {
+  if (!settings.jellyfinUrl) {
+    // Proxy mode: route through /jellyfin, append api_key for auth
+    const base = `/jellyfin/Items/${id}/Images/Primary?fillHeight=450&quality=96`
+    return auth.token ? `${base}&api_key=${auth.token}` : base
+  }
   const base = `${settings.jellyfinUrl}/Items/${id}/Images/Primary?fillHeight=450&quality=96`
   const full = auth.token ? `${base}&api_key=${auth.token}` : base
   return import.meta.env.DEV ? `/img-proxy?url=${encodeURIComponent(full)}` : full
+}
+
+function jellyfinItemUrl(id: string): string {
+  const base = settings.jellyfinUrl || '/jellyfin'
+  return `${base}/web/#!/details?id=${id}`
 }
 </script>
 
@@ -117,8 +127,8 @@ function posterUrl(id: string): string {
         {{ item.Overview }}
       </p>
 
-      <!-- Download button (always visible) -->
-      <div class="mt-auto pt-2">
+      <!-- Download button + View on Jellyfin -->
+      <div class="mt-auto pt-2 flex gap-2">
         <button
           @click="showDownload = true"
           class="w-full flex items-center justify-center gap-2 bg-jellyfin-primary/10 hover:bg-jellyfin-primary text-jellyfin-primary hover:text-white border border-jellyfin-primary/30 hover:border-jellyfin-primary font-medium px-3 py-2 rounded-md transition-all duration-150 text-xs"
@@ -128,6 +138,19 @@ function posterUrl(id: string): string {
           </svg>
           Download
         </button>
+        <a
+          :href="jellyfinItemUrl(item.Id)"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center justify-center bg-jellyfin-surface hover:bg-white/10 text-jellyfin-muted hover:text-jellyfin-text border border-jellyfin-border px-2.5 py-2 rounded-md transition-all duration-150 shrink-0"
+          title="View on Jellyfin"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+        </a>
       </div>
     </div>
   </div>

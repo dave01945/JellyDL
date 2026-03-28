@@ -5,6 +5,7 @@ import NavBar from '@/components/NavBar.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import type { QualityPreset, SpeedPreset } from '@/api/jellyfin'
+import packageJson from '../../package.json'
 
 const settings = useSettingsStore()
 const auth = useAuthStore()
@@ -17,6 +18,7 @@ const saved = ref(false)
 
 const defaultQualityPresetInput = ref<QualityPreset>(settings.defaultQualityPreset)
 const defaultSpeedPresetInput = ref<SpeedPreset>(settings.defaultSpeedPreset)
+const appVersion = packageJson.version
 
 const qualityPresetOptions: { value: QualityPreset; label: string }[] = [
   { value: 'Custom',   label: 'Custom (manual bitrate)' },
@@ -44,23 +46,27 @@ watch(urlInput, () => {
 
 async function testConnection() {
   const url = urlInput.value.trim().replace(/\/+$/, '')
-  if (!url) return
 
   testStatus.value = 'testing'
   testMessage.value = ''
 
   try {
-    // Probe the /System/Info/Public endpoint — no auth required.
-    // In dev, route through the Vite server middleware to avoid browser CORS restrictions.
-    const fetchUrl = import.meta.env.DEV
-      ? '/dev-proxy/System/Info/Public'
-      : `${url}/System/Info/Public`
-    const response = await fetch(fetchUrl, {
-      headers: {
-        Accept: 'application/json',
-        ...(import.meta.env.DEV ? { 'X-Proxy-Target': url } : {}),
-      },
-    })
+    // When no URL is set, probe through the built-in /jellyfin proxy.
+    // When a URL override is set, use /dev-proxy in dev (CORS) or the URL directly in prod.
+    let fetchUrl: string
+    let headers: Record<string, string> = { Accept: 'application/json' }
+
+    if (!url) {
+      fetchUrl = '/jellyfin/System/Info/Public'
+    } else if (import.meta.env.DEV) {
+      fetchUrl = '/dev-proxy/System/Info/Public'
+      headers['X-Proxy-Target'] = url
+    } else {
+      fetchUrl = `${url}/System/Info/Public`
+    }
+
+    const response = await fetch(fetchUrl, { headers })
+
     if (response.ok) {
       try {
         const data = await response.json() as { ServerName?: string; Version?: string }
@@ -122,23 +128,25 @@ function logout() {
         <div class="bg-jellyfin-surface border border-jellyfin-border rounded-xl overflow-hidden">
           <div class="px-6 py-4 border-b border-jellyfin-border">
             <h2 class="font-semibold text-jellyfin-text">Jellyfin Server</h2>
-            <p class="text-sm text-jellyfin-muted mt-0.5">The URL of your Jellyfin server</p>
+            <p class="text-sm text-jellyfin-muted mt-0.5">Optional URL override — leave blank to use the built-in proxy</p>
           </div>
 
           <div class="p-6 space-y-4">
             <!-- URL Input -->
             <div class="space-y-1.5">
-              <label for="server-url" class="block text-sm font-medium text-jellyfin-text">Server URL</label>
+              <label for="server-url" class="block text-sm font-medium text-jellyfin-text">Server URL <span class="text-jellyfin-muted font-normal">(optional override)</span></label>
               <input
                 id="server-url"
                 v-model="urlInput"
                 type="url"
-                placeholder="http://192.168.1.100:8096"
+                placeholder="Leave blank to use the built-in proxy"
                 class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text placeholder-jellyfin-muted/60 rounded-lg px-4 py-3 text-sm font-mono focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent outline-none transition"
               />
               <p class="text-xs text-jellyfin-muted">
-                Include the protocol (<code class="bg-jellyfin-bg px-1 py-0.5 rounded text-jellyfin-text">http://</code> or
-                <code class="bg-jellyfin-bg px-1 py-0.5 rounded text-jellyfin-text">https://</code>) and port.
+                Leave blank (recommended for Docker deployments) to route Jellyfin API calls through the
+                built-in <code class="bg-jellyfin-bg px-1 py-0.5 rounded text-jellyfin-text">/jellyfin</code> proxy.
+                Fill in only when accessing Jellyfin directly (e.g.
+                <code class="bg-jellyfin-bg px-1 py-0.5 rounded text-jellyfin-text">http://192.168.1.100:8096</code>).
               </p>
             </div>
 
@@ -183,7 +191,7 @@ function logout() {
             <div class="flex flex-wrap gap-3 pt-1">
               <button
                 @click="testConnection"
-                :disabled="!urlInput || testStatus === 'testing'"
+                :disabled="testStatus === 'testing'"
                 class="flex items-center gap-2 bg-jellyfin-bg hover:bg-jellyfin-card disabled:opacity-50 disabled:cursor-not-allowed border border-jellyfin-border text-jellyfin-text font-medium px-4 py-2 rounded-lg text-sm transition-colors"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -193,8 +201,7 @@ function logout() {
               </button>
               <button
                 @click="saveSettings"
-                :disabled="!urlInput"
-                class="flex items-center gap-2 bg-jellyfin-primary hover:bg-jellyfin-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
+                class="flex items-center gap-2 bg-jellyfin-primary hover:bg-jellyfin-primary-hover text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
@@ -235,26 +242,6 @@ function logout() {
           </div>
         </div>
 
-        <!-- CORS notice -->
-        <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-6 space-y-3">
-          <div class="flex items-center gap-2 text-amber-400 font-semibold">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            CORS Configuration Required
-          </div>
-          <p class="text-sm text-amber-300/80">
-            When accessing JellyDL from a different origin than your Jellyfin server, you must allow CORS in Jellyfin.
-          </p>
-          <ol class="text-sm text-amber-300/80 space-y-1.5 list-decimal list-inside">
-            <li>Open your Jellyfin Dashboard</li>
-            <li>Go to <strong>Administration → Dashboard → Networking</strong></li>
-            <li>Under <strong>Known proxies and networks</strong>, add the address of the machine running JellyDL</li>
-            <li>Add your JellyDL URL to the <strong>CORS hosts</strong> list (e.g. <code class="bg-black/30 px-1 rounded">http://localhost:5173</code> for dev)</li>
-            <li>Save and restart Jellyfin if prompted</li>
-          </ol>
-        </div>
-
         <!-- Account section (only shown when logged in) -->
         <div v-if="auth.isAuthenticated" class="bg-jellyfin-surface border border-jellyfin-border rounded-xl overflow-hidden">
           <div class="px-6 py-4 border-b border-jellyfin-border">
@@ -283,7 +270,7 @@ function logout() {
         </div>
 
         <!-- Version -->
-        <p class="text-center text-xs text-jellyfin-muted">JellyDL v1.0.0</p>
+        <p class="text-center text-xs text-jellyfin-muted">JellyDL v{{ appVersion }}</p>
 
       </div>
     </main>

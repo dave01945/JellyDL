@@ -9,10 +9,12 @@ export interface QueueEntry {
   jobId: string
   itemId: string
   itemName: string
+  seriesName: string | null
   containerFormat: string
   state: TranscodeJobState | 'pending'
   progressPercent: number | null
   outputSizeBytes: number | null
+  sourceFileSizeBytes: number | null
   error: string | null
   createdAt: string
 }
@@ -21,7 +23,9 @@ interface PersistedEntry {
   jobId: string
   itemId: string
   itemName: string
+  seriesName?: string | null
   containerFormat: string
+  sourceFileSizeBytes?: number | null
 }
 
 const STORAGE_KEY = 'jellyfindl_queue'
@@ -65,13 +69,36 @@ function loadPersisted(): PersistedEntry[] {
 }
 
 function savePersisted(jobs: QueueEntry[]) {
-  const data: PersistedEntry[] = jobs.map(({ jobId, itemId, itemName, containerFormat }) => ({
+  const data: PersistedEntry[] = jobs.map(({ jobId, itemId, itemName, seriesName, containerFormat, sourceFileSizeBytes }) => ({
     jobId,
     itemId,
     itemName,
+    seriesName: seriesName ?? null,
     containerFormat,
+    sourceFileSizeBytes: sourceFileSizeBytes ?? null,
   }))
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+function requestNotificationPermission() {
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => { /* ignore */ })
+  }
+}
+
+function notifyJobComplete(itemName: string) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  try {
+    new Notification('Transcode ready', {
+      body: `${itemName} is ready to download`,
+      icon: '/favicon.ico',
+      tag: `jellydl-complete-${itemName}`,
+    })
+  } catch {
+    // Notification constructor can throw in some contexts
+  }
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -133,6 +160,8 @@ export const useQueueStore = defineStore('queue', () => {
             const nextError = raw.error ?? raw.Error ?? null
             const nextItemName = raw.itemName ?? raw.ItemName ?? jobs.value[idx].itemName
 
+            const prevState = jobs.value[idx].state
+
             // splice guarantees Vue's reactivity system detects the change
             jobs.value.splice(idx, 1, {
               ...jobs.value[idx],
@@ -143,6 +172,10 @@ export const useQueueStore = defineStore('queue', () => {
               error: nextError,
               itemName: nextItemName,
             })
+
+            if (nextState === 'Completed' && prevState !== 'Completed') {
+              notifyJobComplete(nextItemName)
+            }
           }
         } catch {
           // Network error — leave state as-is; will retry next tick
@@ -174,21 +207,30 @@ export const useQueueStore = defineStore('queue', () => {
     itemId: string,
     itemName: string,
     options: TranscodeJobRequest,
+    seriesName?: string | null,
   ): Promise<string> {
     const api = auth.getApiClient()
-    const jobId = await api.createTranscodeJob({ ...options, itemId })
+    const [jobId, srcInfo] = await Promise.all([
+      api.createTranscodeJob({ ...options, itemId }),
+      api.getItemVideoInfo(itemId, auth.userId!).catch(() => null),
+    ])
 
     const entry: QueueEntry = {
       jobId,
       itemId,
       itemName,
+      seriesName: seriesName ?? null,
       containerFormat: options.containerFormat,
       state: 'Queued',
       progressPercent: null,
       outputSizeBytes: null,
+      sourceFileSizeBytes: srcInfo?.size ?? null,
       error: null,
       createdAt: new Date().toISOString(),
     }
+
+    // Ask for notification permission the first time a job is queued
+    requestNotificationPermission()
 
     // Most-recent-first
     jobs.value = [entry, ...jobs.value]
@@ -233,6 +275,8 @@ export const useQueueStore = defineStore('queue', () => {
       state: 'pending' as const,
       progressPercent: null,
       outputSizeBytes: null,
+      seriesName: p.seriesName ?? null,
+      sourceFileSizeBytes: p.sourceFileSizeBytes ?? null,
       error: null,
       createdAt: new Date(0).toISOString(),
     }))
