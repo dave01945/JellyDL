@@ -114,6 +114,10 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          append_body: true
+          body: |
+            Container package: https://github.com/${{ github.repository_owner }}/packages/container/package/jellydl
+            Tagged image: https://ghcr.io/${{ github.repository_owner }}/jellydl:${{ github.ref_name }}
           files: |
             ${{ env.ASSET_NAME }}
             ${{ env.CHECKSUM_NAME }}
