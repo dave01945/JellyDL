@@ -4,6 +4,7 @@ import type { JellyfinMediaItem } from '@/api/jellyfin'
 import DownloadModal from '@/components/DownloadModal.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
+import { jellyfinItemUrl as makeJellyfinItemUrl } from '@/utils/jellyfinLinks'
 
 defineProps<{
   item: JellyfinMediaItem
@@ -34,8 +35,7 @@ function posterUrl(id: string): string {
 }
 
 function jellyfinItemUrl(id: string): string {
-  const base = settings.jellyfinUrl || '/jellyfin'
-  return `${base}/web/#!/details?id=${id}`
+  return makeJellyfinItemUrl(settings.jellyfinUrl, id)
 }
 </script>
 

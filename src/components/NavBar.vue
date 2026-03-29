@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
 import { useSettingsStore } from '@/stores/settings'
+import { jellyfinWebUrl } from '@/utils/jellyfinLinks'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const queue = useQueueStore()
 const settings = useSettingsStore()
+const jellyfinUrl = computed(() => jellyfinWebUrl(settings.jellyfinUrl))
 
 function logout() {
   auth.logout()
@@ -96,8 +99,8 @@ function logout() {
         <div class="flex items-center gap-3">
           <!-- Link to Jellyfin web UI -->
           <a
-            v-if="settings.jellyfinUrl"
-            :href="settings.jellyfinUrl"
+            v-if="auth.isAuthenticated"
+            :href="jellyfinUrl"
             target="_blank"
             rel="noopener noreferrer"
             class="p-2 rounded-md text-jellyfin-muted hover:text-jellyfin-text hover:bg-white/5 transition-colors"
