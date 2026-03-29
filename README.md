@@ -120,8 +120,13 @@ This repository includes a combined workflow at `.github/workflows/docker-build.
 
 It runs in two modes:
 
-- **Build only** (no push): runs on pull requests and pushes to `main`.
-- **Build and push**: runs on tag pushes matching `v*` and on manual runs.
+- **Build only** (no push): runs on pull requests.
+- **Build and push**: runs on pushes to `main`, tag pushes matching `v*`, and manual runs.
+
+For pushes to `main`, the workflow publishes:
+
+- `ghcr.io/<owner>/jellydl:main-<short-sha>`
+- `ghcr.io/<owner>/jellydl:latest`
 
 ### Automatic publish from tags
 
