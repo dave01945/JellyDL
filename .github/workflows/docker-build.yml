@@ -77,3 +77,18 @@ jobs:
             ${{ env.IMAGE_REPO }}:latest
           build-args: |
             VERSION=${{ steps.vars.outputs.app_version }}
+
+  release:
+    needs: docker
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
