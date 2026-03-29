@@ -37,6 +37,15 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         # Forward the Authorization header so Jellyfin receives the token.
         proxy_set_header Authorization $http_authorization;
+
+        # Keep upstream redirects and root-absolute links inside /jellyfin.
+        proxy_redirect ~^/(.*)$ /jellyfin/$1;
+        proxy_set_header Accept-Encoding "";
+        sub_filter_once off;
+        sub_filter_types text/html;
+        sub_filter 'href="/' 'href="/jellyfin/';
+        sub_filter 'src="/' 'src="/jellyfin/';
+
         proxy_buffering off;
         proxy_read_timeout 300s;
     }
