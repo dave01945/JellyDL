@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.local
 .env
+
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
