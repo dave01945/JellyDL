@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, JellyfinMediaSource, TranscodeJobRequest, QualityPreset, SpeedPreset } from '@/api/jellyfin'
+import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, JellyfinMediaSource, TranscodeJobRequest, QualityPreset } from '@/api/jellyfin'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
@@ -89,16 +89,6 @@ const qualityPresets: { value: QualityPreset; label: string; description: string
   { value: 'VeryHigh', label: 'Very High', description: 'CRF 15 — near-lossless for most content' },
 ]
 
-const speedPresets: { value: SpeedPreset; label: string; description: string }[] = [
-  { value: 'Default',  label: 'Default',   description: 'Use encoder built-in default' },
-  { value: 'Fastest',  label: 'Fastest',   description: 'Fastest encode, largest file' },
-  { value: 'VeryFast', label: 'Very Fast', description: 'Very fast encode' },
-  { value: 'Fast',     label: 'Fast',      description: 'Fast encode' },
-  { value: 'Medium',   label: 'Medium',    description: 'Balanced speed / compression' },
-  { value: 'Slow',     label: 'Slow',      description: 'Better compression, slower encode' },
-  { value: 'VerySlow', label: 'Very Slow', description: 'Best compression, slowest encode' },
-]
-
 const selectedFormat = ref('mp4')
 const selectedResolution = ref('1080p')
 const selectedBitrate = ref('8000000')
@@ -107,7 +97,6 @@ const selectedAudioBitrate = ref('128000')
 const selectedAudioChannels = ref('2')
 const selectedSubtitles = ref('none')
 const selectedQualityPreset = ref<QualityPreset>(settings.defaultQualityPreset)
-const selectedSpeedPreset = ref<SpeedPreset>(settings.defaultSpeedPreset)
 
 const posterUrl = computed(() => {
   const base = `${settings.jellyfinUrl}/Items/${props.item.Id}/Images/Primary?fillHeight=200&quality=90`
@@ -125,12 +114,14 @@ const autoVideoBitrateByResolution: Record<string, number> = {
 
 // Multipliers applied to the reference resolution bitrate for each CRF-based preset.
 // Reference rate ≈ CRF 18 (High quality). Derived from typical H.264 CRF output rates.
+// Real-world CRF 23 output on typical content runs closer to 70% of the CRF 18 reference
+// rather than the theoretical ~56% suggested by the 6-steps-per-octave rule.
 const qualityPresetMultiplier: Record<QualityPreset, number> = {
   Custom:   1.0,  // unused — manual bitrate used instead
   VeryHigh: 1.75, // CRF 15
   High:     1.0,  // CRF 18
-  Medium:   0.55, // CRF 23
-  Low:      0.28, // CRF 28
+  Medium:   0.70, // CRF 23
+  Low:      0.35, // CRF 28
 }
 
 // Reference bitrates above assume H.264. Other codecs achieve different sizes at equivalent quality.
@@ -778,6 +769,26 @@ async function startDownload() {
     const audioChannelsNum = parseInt(selectedAudioChannels.value)
     const useCustomBitrate = selectedQualityPreset.value === 'Custom'
 
+    // CRF values matching the quality preset descriptions shown in the UI.
+    const qualityPresetCrf: Partial<Record<QualityPreset, number>> = {
+      VeryHigh: 15,
+      High:     18,
+      Medium:   23,
+      Low:      28,
+    }
+    const presetCrf = !useCustomBitrate ? qualityPresetCrf[selectedQualityPreset.value] : undefined
+
+    // Compute a target videoBitrate for non-Custom presets so the backend has an
+    // explicit bitrate constraint even if it doesn't act on the crf field.
+    // Uses the same reference bitrates and multipliers as the size estimator.
+    let presetVideoBitrate: number | undefined
+    if (!useCustomBitrate && !isOriginal) {
+      const refBitrate = autoVideoBitrateByResolution[selectedResolution.value] ?? 4_000_000
+      const codecMult = codecFormatMultiplier[selectedFormat.value] ?? 1.0
+      const qualityMult = qualityPresetMultiplier[selectedQualityPreset.value] ?? 1.0
+      presetVideoBitrate = Math.round(refBitrate * qualityMult * codecMult)
+    }
+
     const baseRequest: Omit<TranscodeJobRequest, 'itemId'> = {
       ...(props.item.Type !== 'Series' && selectedMovieMediaSourceId.value
         ? { mediaSourceId: selectedMovieMediaSourceId.value }
@@ -786,8 +797,9 @@ async function startDownload() {
       containerFormat,
       ...(isOriginal ? {} : { maxWidth, maxHeight }),
       ...(useCustomBitrate && bitrateNum ? { videoBitrate: bitrateNum } : {}),
+      ...(presetVideoBitrate !== undefined ? { videoBitrate: presetVideoBitrate } : {}),
+      ...(presetCrf !== undefined ? { crf: presetCrf } : {}),
       preset: selectedQualityPreset.value,
-      speedPreset: selectedSpeedPreset.value,
       audioCodec: selectedAudioCodec.value,
       ...(isAudioCopy ? {} : { audioBitrate: audioBitrateNum ?? 128_000 }),
       ...(!isAudioCopy && audioChannelsNum > 0 ? { audioChannels: audioChannelsNum } : {}),
@@ -818,13 +830,15 @@ async function startDownload() {
             )
 
             // ── Video bitrate ceiling ────────────────────────────────────────
+            // Only cap an explicitly-set manual bitrate (Custom preset).
+            // For CRF-based presets, leave videoBitrate unset so the CRF drives
+            // quality; setting it to the source bitrate would override the CRF
+            // and produce a file as large as the original.
             const srcBitrate = src.videoBitrate ?? src.totalBitrate ?? null
-            if (srcBitrate) {
+            if (srcBitrate && request.videoBitrate) {
               request = {
                 ...request,
-                videoBitrate: request.videoBitrate
-                  ? Math.min(request.videoBitrate, srcBitrate)
-                  : srcBitrate,
+                videoBitrate: Math.min(request.videoBitrate, srcBitrate),
               }
             }
 
@@ -1083,14 +1097,6 @@ async function startDownload() {
                   <option v-for="q in qualityPresets" :key="q.value" :value="q.value">{{ q.label }}</option>
                 </select>
                 <p class="text-xs text-jellyfin-muted">{{ qualityPresets.find(q => q.value === selectedQualityPreset)?.description }}</p>
-              </div>
-
-              <div class="space-y-1.5">
-                <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Speed Preset</label>
-                <select v-model="selectedSpeedPreset" class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition">
-                  <option v-for="s in speedPresets" :key="s.value" :value="s.value">{{ s.label }}</option>
-                </select>
-                <p class="text-xs text-jellyfin-muted">{{ speedPresets.find(s => s.value === selectedSpeedPreset)?.description }}</p>
               </div>
 
               <div class="space-y-1.5">

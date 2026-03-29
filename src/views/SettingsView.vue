@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import NavBar from '@/components/NavBar.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
-import type { QualityPreset, SpeedPreset } from '@/api/jellyfin'
+import type { QualityPreset } from '@/api/jellyfin'
 import packageJson from '../../package.json'
 
 const settings = useSettingsStore()
@@ -17,7 +17,6 @@ const testMessage = ref('')
 const saved = ref(false)
 
 const defaultQualityPresetInput = ref<QualityPreset>(settings.defaultQualityPreset)
-const defaultSpeedPresetInput = ref<SpeedPreset>(settings.defaultSpeedPreset)
 const appVersion = packageJson.version
 
 const qualityPresetOptions: { value: QualityPreset; label: string }[] = [
@@ -26,16 +25,6 @@ const qualityPresetOptions: { value: QualityPreset; label: string }[] = [
   { value: 'Medium',   label: 'Medium — CRF 23 (balanced)' },
   { value: 'High',     label: 'High — CRF 18 (high quality)' },
   { value: 'VeryHigh', label: 'Very High — CRF 15 (near-lossless)' },
-]
-
-const speedPresetOptions: { value: SpeedPreset; label: string }[] = [
-  { value: 'Default',  label: 'Default (encoder built-in)' },
-  { value: 'Fastest',  label: 'Fastest' },
-  { value: 'VeryFast', label: 'Very Fast' },
-  { value: 'Fast',     label: 'Fast' },
-  { value: 'Medium',   label: 'Medium' },
-  { value: 'Slow',     label: 'Slow' },
-  { value: 'VerySlow', label: 'Very Slow' },
 ]
 
 // Reset test status when URL changes
@@ -95,7 +84,6 @@ function saveSettings() {
   const url = urlInput.value.trim().replace(/\/+$/, '')
   settings.setJellyfinUrl(url)
   settings.setDefaultQualityPreset(defaultQualityPresetInput.value)
-  settings.setDefaultSpeedPreset(defaultSpeedPresetInput.value)
   saved.value = true
 }
 
@@ -218,7 +206,7 @@ function logout() {
             <h2 class="font-semibold text-jellyfin-text">Transcode Defaults</h2>
             <p class="text-sm text-jellyfin-muted mt-0.5">Default presets used when opening the download dialog</p>
           </div>
-          <div class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div class="p-6 grid grid-cols-1 gap-5">
             <div class="space-y-1.5">
               <label for="default-quality-preset" class="block text-sm font-medium text-jellyfin-text">Default Quality Preset</label>
               <select
@@ -227,16 +215,6 @@ function logout() {
                 class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent outline-none transition"
               >
                 <option v-for="opt in qualityPresetOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-            </div>
-            <div class="space-y-1.5">
-              <label for="default-speed-preset" class="block text-sm font-medium text-jellyfin-text">Default Speed Preset</label>
-              <select
-                id="default-speed-preset"
-                v-model="defaultSpeedPresetInput"
-                class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent outline-none transition"
-              >
-                <option v-for="opt in speedPresetOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </div>
           </div>

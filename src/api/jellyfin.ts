@@ -87,7 +87,6 @@ export interface JellyfinEpisode {
 }
 
 export type QualityPreset = 'Custom' | 'Low' | 'Medium' | 'High' | 'VeryHigh'
-export type SpeedPreset = 'Default' | 'Fastest' | 'VeryFast' | 'Fast' | 'Medium' | 'Slow' | 'VerySlow'
 
 export interface TranscodeJobRequest {
   itemId: string
@@ -97,7 +96,6 @@ export interface TranscodeJobRequest {
   videoBitrate?: number
   crf?: number
   preset?: QualityPreset
-  speedPreset?: SpeedPreset
   maxWidth?: number
   maxHeight?: number
   audioCodec: string
