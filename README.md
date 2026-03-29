@@ -120,13 +120,8 @@ This repository includes a combined workflow at `.github/workflows/docker-build.
 
 It runs in two modes:
 
-- **Build only** (no push): runs on pull requests.
-- **Build and push**: runs on pushes to `main`, tag pushes matching `v*`, and manual runs.
-
-For pushes to `main`, the workflow publishes:
-
-- `ghcr.io/<owner>/jellydl:main-<short-sha>`
-- `ghcr.io/<owner>/jellydl:latest`
+- **Build only** (no container build/push): runs on pull requests.
+- **Build and push container**: runs only on tag pushes matching `v*`.
 
 ### Automatic publish from tags
 
@@ -142,12 +137,10 @@ The workflow publishes:
 - `ghcr.io/<owner>/jellydl:v1.0.2`
 - `ghcr.io/<owner>/jellydl:latest`
 
-### Manual publish (workflow_dispatch)
+For tag builds, Actions matches the VS Code task behavior by deriving app version from the image tag:
 
-1. Open **Actions** in GitHub.
-2. Select **Docker Build**.
-3. Click **Run workflow**.
-4. Enter `image_tag` (example: `v1.0.2`).
+- image tag: `v1.0.2`
+- app version used for build: `1.0.2` (via `npm version --no-git-tag-version`)
 
 ### Permissions and auth
 
