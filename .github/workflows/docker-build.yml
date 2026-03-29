@@ -84,11 +84,38 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+      packages: read
+    env:
+      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/jellydl
     steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Export Docker image as archive
+        shell: bash
+        run: |
+          IMAGE_TAG="${GITHUB_REF_NAME}"
+          ASSET_NAME="jellydl-${IMAGE_TAG}.tar.gz"
+          CHECKSUM_NAME="${ASSET_NAME}.sha256"
+
+          docker pull "${IMAGE_REPO}:${IMAGE_TAG}"
+          docker save "${IMAGE_REPO}:${IMAGE_TAG}" | gzip > "${ASSET_NAME}"
+          sha256sum "${ASSET_NAME}" > "${CHECKSUM_NAME}"
+
+          echo "ASSET_NAME=${ASSET_NAME}" >> "$GITHUB_ENV"
+          echo "CHECKSUM_NAME=${CHECKSUM_NAME}" >> "$GITHUB_ENV"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          files: |
+            ${{ env.ASSET_NAME }}
+            ${{ env.CHECKSUM_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
