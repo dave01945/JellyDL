@@ -151,8 +151,9 @@ The workflow publishes:
 
 ### Permissions and auth
 
-- The workflow uses `GITHUB_TOKEN` and `packages: write` permission to push to GHCR.
-- No PAT is required when publishing to the same repository owner namespace.
+- The workflow uses `GHCR_TOKEN` (if defined) and falls back to `GITHUB_TOKEN`.
+- `GITHUB_TOKEN` works when the GHCR package grants this repository write access.
+- If pushes fail with `403 Forbidden`, create a PAT with `write:packages` (and `read:packages`) as `GHCR_TOKEN` in repository secrets.
 
 ## VS Code Tasks
 
