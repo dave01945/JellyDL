@@ -25,9 +25,10 @@ server {
         try_files $uri =404;
     }
 
-    # Proxy Jellyfin API calls to the internal server.
+    # Proxy Jellyfin paths (API + web assets) to the internal server.
+    # Use ^~ so regex static-asset locations do not intercept /jellyfin/*.js, etc.
     # JELLYFIN_INTERNAL_URL is substituted at container startup via envsubst.
-    location /jellyfin/ {
+    location ^~ /jellyfin/ {
         proxy_pass ${JELLYFIN_INTERNAL_URL}/;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
