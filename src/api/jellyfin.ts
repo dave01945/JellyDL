@@ -50,6 +50,20 @@ export interface JellyfinMediaItem {
   EpisodeCount?: number
 }
 
+export interface JellyfinMediaSource {
+  Id: string
+  Name?: string
+  Path?: string
+  Size?: number
+  Bitrate?: number
+  Container?: string
+  Width?: number
+  Height?: number
+  VideoBitrate?: number
+  AudioChannels?: number
+  AudioBitrate?: number
+}
+
 export interface JellyfinSeason {
   Id: string
   Name: string
@@ -77,6 +91,7 @@ export type SpeedPreset = 'Default' | 'Fastest' | 'VeryFast' | 'Fast' | 'Medium'
 
 export interface TranscodeJobRequest {
   itemId: string
+  mediaSourceId?: string
   videoCodec: string
   containerFormat: string
   videoBitrate?: number
@@ -239,7 +254,53 @@ export class JellyfinAPI {
    * result is always smaller / lower quality than the original.
    * Returns null fields if the info cannot be fetched.
    */
-  async getItemVideoInfo(itemId: string, userId: string): Promise<{
+  async getItemMediaSources(itemId: string, userId: string): Promise<JellyfinMediaSource[]> {
+    try {
+      const response = await this.client.get<{
+        MediaSources?: Array<{
+          Id?: string
+          Name?: string
+          Path?: string
+          Size?: number
+          Bitrate?: number
+          Container?: string
+          MediaStreams?: Array<{
+            Type: string
+            BitRate?: number
+            Width?: number
+            Height?: number
+            Channels?: number
+          }>
+        }>
+      }>(`/Users/${userId}/Items/${itemId}`, {
+        params: { Fields: 'MediaSources' },
+      })
+
+      return (response.data.MediaSources ?? [])
+        .filter((src): src is NonNullable<typeof src> & { Id: string } => Boolean(src?.Id))
+        .map((src) => {
+          const videoStream = src.MediaStreams?.find(s => s.Type === 'Video')
+          const audioStream = src.MediaStreams?.find(s => s.Type === 'Audio')
+          return {
+            Id: src.Id,
+            Name: src.Name,
+            Path: src.Path,
+            Size: src.Size,
+            Bitrate: src.Bitrate,
+            Container: src.Container,
+            Width: videoStream?.Width,
+            Height: videoStream?.Height,
+            VideoBitrate: videoStream?.BitRate,
+            AudioChannels: audioStream?.Channels,
+            AudioBitrate: audioStream?.BitRate,
+          }
+        })
+    } catch {
+      return []
+    }
+  }
+
+  async getItemVideoInfo(itemId: string, userId: string, mediaSourceId?: string): Promise<{
     videoBitrate: number | null
     totalBitrate: number | null
     width: number | null
@@ -251,6 +312,7 @@ export class JellyfinAPI {
     try {
       const response = await this.client.get<{
         MediaSources?: Array<{
+          Id?: string
           Bitrate?: number
           Size?: number
           MediaStreams?: Array<{
@@ -264,7 +326,10 @@ export class JellyfinAPI {
       }>(`/Users/${userId}/Items/${itemId}`, {
         params: { Fields: 'MediaSources' },
       })
-      const source = response.data.MediaSources?.[0]
+      const allSources = response.data.MediaSources ?? []
+      const source = mediaSourceId
+        ? allSources.find(s => s.Id === mediaSourceId) ?? allSources[0]
+        : allSources[0]
       if (!source) return { videoBitrate: null, totalBitrate: null, width: null, height: null, audioChannels: null, audioBitrate: null, size: null }
       const videoStream = source.MediaStreams?.find(s => s.Type === 'Video')
       const audioStream = source.MediaStreams?.find(s => s.Type === 'Audio')

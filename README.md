@@ -114,6 +114,41 @@ GHCR_TOKEN=your_github_pat_here
 
 The VS Code build/push tasks source `.env` automatically, so no prompts are shown for the registry or username.
 
+## GitHub Actions (Build and Publish)
+
+This repository includes a combined workflow at `.github/workflows/docker-build.yml`.
+
+It runs in two modes:
+
+- **Build only** (no push): runs on pull requests and pushes to `main`.
+- **Build and push**: runs on tag pushes matching `v*` and on manual runs.
+
+### Automatic publish from tags
+
+Push a version tag like `v1.0.2`:
+
+```bash
+git tag v1.0.2
+git push origin v1.0.2
+```
+
+The workflow publishes:
+
+- `ghcr.io/<owner>/jellydl:v1.0.2`
+- `ghcr.io/<owner>/jellydl:latest`
+
+### Manual publish (workflow_dispatch)
+
+1. Open **Actions** in GitHub.
+2. Select **Docker Build**.
+3. Click **Run workflow**.
+4. Enter `image_tag` (example: `v1.0.2`).
+
+### Permissions and auth
+
+- The workflow uses `GITHUB_TOKEN` and `packages: write` permission to push to GHCR.
+- No PAT is required when publishing to the same repository owner namespace.
+
 ## VS Code Tasks
 
 Tasks are defined in `.vscode/tasks.json`.

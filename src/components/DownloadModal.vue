@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, TranscodeJobRequest, QualityPreset, SpeedPreset } from '@/api/jellyfin'
+import type { JellyfinMediaItem, JellyfinSeason, JellyfinEpisode, JellyfinMediaSource, TranscodeJobRequest, QualityPreset, SpeedPreset } from '@/api/jellyfin'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
@@ -431,7 +431,28 @@ watch(selectedResolution, (val) => {
     '360p': '1000000',
   }
 
-  selectedBitrate.value = recommendedByResolution[val] ?? '0'
+  const recommended = recommendedByResolution[val] ?? '0'
+  if (recommended === '0') {
+    selectedBitrate.value = '0'
+    return
+  }
+
+  const sourceBitrate = sourceInfo.value?.videoBitrate ?? sourceInfo.value?.totalBitrate ?? null
+  if (!sourceBitrate) {
+    selectedBitrate.value = recommended
+    return
+  }
+
+  const recommendedNum = parseInt(recommended)
+  if (recommendedNum <= sourceBitrate || sourceBitrate >= recommendedNum * VIDEO_BITRATE_TOLERANCE_RATIO) {
+    selectedBitrate.value = recommended
+    return
+  }
+
+  const best = [...bitrates]
+    .reverse()
+    .find((b) => isBitratePresetAllowedBySource(b.value, sourceBitrate))
+  selectedBitrate.value = best ? best.value : '0'
 })
 
 // ─── Source file size & option filtering ─────────────────────────────────────
@@ -447,6 +468,56 @@ interface SourceInfo {
 }
 
 const sourceInfo = ref<SourceInfo | null>(null)
+const movieMediaSources = ref<JellyfinMediaSource[]>([])
+const selectedMovieMediaSourceId = ref<string>('')
+
+function mapMediaSourceToSourceInfo(source: JellyfinMediaSource): SourceInfo {
+  return {
+    videoBitrate: source.VideoBitrate ?? null,
+    totalBitrate: source.Bitrate ?? null,
+    width: source.Width ?? null,
+    height: source.Height ?? null,
+    audioChannels: source.AudioChannels ?? null,
+    audioBitrate: source.AudioBitrate ?? null,
+    size: source.Size ?? null,
+  }
+}
+
+const selectedMovieMediaSource = computed(() => {
+  if (props.item.Type === 'Series') return null
+  if (movieMediaSources.value.length === 0) return null
+  if (!selectedMovieMediaSourceId.value) return movieMediaSources.value[0]
+  return movieMediaSources.value.find(src => src.Id === selectedMovieMediaSourceId.value) ?? movieMediaSources.value[0]
+})
+
+// Allow selecting the next preset bitrate when source bitrate is close.
+// Example: source >= 1.8 Mbps can use the 2.0 Mbps preset.
+const VIDEO_BITRATE_TOLERANCE_RATIO = 0.9
+
+function isBitratePresetAllowedBySource(presetValue: string, sourceBitrate: number | null): boolean {
+  if (presetValue === '0') return true
+  if (!sourceBitrate) return true
+
+  const presetBitrate = parseInt(presetValue)
+  if (!presetBitrate || Number.isNaN(presetBitrate)) return false
+
+  return presetBitrate <= sourceBitrate || sourceBitrate >= presetBitrate * VIDEO_BITRATE_TOLERANCE_RATIO
+}
+
+function formatVersionBitrate(bitsPerSecond?: number): string {
+  if (!bitsPerSecond || bitsPerSecond <= 0) return 'Unknown bitrate'
+  return `${(bitsPerSecond / 1_000_000).toFixed(1)} Mbps`
+}
+
+function movieVersionLabel(source: JellyfinMediaSource, index: number): string {
+  const dims = source.Width && source.Height ? `${source.Width}x${source.Height}` : null
+  const container = source.Container ? source.Container.toUpperCase() : null
+  const bitrate = formatVersionBitrate(source.VideoBitrate ?? source.Bitrate)
+  const size = source.Size ? toExactSize(source.Size) : null
+  const friendlyName = source.Name?.trim() || `Version ${index + 1}`
+  const suffix = [dims, container, bitrate, size].filter(Boolean).join(' · ')
+  return suffix ? `${friendlyName} (${suffix})` : friendlyName
+}
 
 /**
  * Total source file size for the current selection.
@@ -456,7 +527,7 @@ const sourceInfo = ref<SourceInfo | null>(null)
  * - TV series scope: not shown (too many episodes to pre-load reliably).
  */
 const sourceFileSize = computed((): number | null => {
-  if (props.item.Type !== 'Series') return sourceInfo.value?.size ?? null
+  if (props.item.Type !== 'Series') return selectedMovieMediaSource.value?.Size ?? sourceInfo.value?.size ?? null
 
   if (scope.value === 'episodes') {
     const selected = Object.values(episodesBySeason.value)
@@ -511,7 +582,7 @@ const availableAudioBitrates = computed(() => {
 const availableVideoBitrates = computed(() => {
   const srcBps = sourceInfo.value?.videoBitrate ?? sourceInfo.value?.totalBitrate
   if (!srcBps) return bitrates
-  return bitrates.filter(b => b.value === '0' || parseInt(b.value) <= srcBps)
+  return bitrates.filter(b => isBitratePresetAllowedBySource(b.value, srcBps))
 })
 
 // Only show channel layouts at or below the source channel count.
@@ -549,8 +620,8 @@ watch(sourceInfo, (info) => {
   const srcVideoBps = info.videoBitrate ?? info.totalBitrate
   if (srcVideoBps) {
     const cur = parseInt(selectedBitrate.value)
-    if (cur > 0 && cur > srcVideoBps) {
-      const best = [...bitrates].reverse().find(b => b.value !== '0' && parseInt(b.value) <= srcVideoBps)
+    if (cur > 0 && !isBitratePresetAllowedBySource(selectedBitrate.value, srcVideoBps)) {
+      const best = [...bitrates].reverse().find(b => isBitratePresetAllowedBySource(b.value, srcVideoBps))
       selectedBitrate.value = best ? best.value : '0'
     }
   }
@@ -582,6 +653,13 @@ watch(selectedEpisodeIds, () => {
   sourceInfo.value = selected.length > 0 ? deriveSourceInfoFromEpisodes(selected) : null
 })
 
+watch(selectedMovieMediaSourceId, () => {
+  if (props.item.Type === 'Series') return
+  const selectedSource = selectedMovieMediaSource.value
+  if (!selectedSource) return
+  sourceInfo.value = mapMediaSourceToSourceInfo(selectedSource)
+})
+
 onMounted(async () => {
   if (props.item.Type === 'Series') loadSeasons()
 
@@ -590,7 +668,13 @@ onMounted(async () => {
   if (props.item.Type !== 'Series') {
     try {
       const api = auth.getApiClient()
-      sourceInfo.value = await api.getItemVideoInfo(props.item.Id, auth.userId!)
+      movieMediaSources.value = await api.getItemMediaSources(props.item.Id, auth.userId!)
+      if (movieMediaSources.value.length > 0) {
+        selectedMovieMediaSourceId.value = movieMediaSources.value[0].Id
+        sourceInfo.value = mapMediaSourceToSourceInfo(movieMediaSources.value[0])
+      } else {
+        sourceInfo.value = await api.getItemVideoInfo(props.item.Id, auth.userId!)
+      }
     } catch {
       // non-critical — options won't be filtered and size won't be shown
     }
@@ -695,6 +779,9 @@ async function startDownload() {
     const useCustomBitrate = selectedQualityPreset.value === 'Custom'
 
     const baseRequest: Omit<TranscodeJobRequest, 'itemId'> = {
+      ...(props.item.Type !== 'Series' && selectedMovieMediaSourceId.value
+        ? { mediaSourceId: selectedMovieMediaSourceId.value }
+        : {}),
       videoCodec: isOriginal ? 'copy' : videoCodec,
       containerFormat,
       ...(isOriginal ? {} : { maxWidth, maxHeight }),
@@ -724,7 +811,11 @@ async function startDownload() {
           // Fetch source media info to enforce ceilings (output must be <= source).
           // Skip for copy-video jobs since there is no re-encode to constrain.
           if (request.videoCodec !== 'copy') {
-            const src = await api.getItemVideoInfo(id, auth.userId!)
+            const src = await api.getItemVideoInfo(
+              id,
+              auth.userId!,
+              props.item.Type !== 'Series' ? selectedMovieMediaSourceId.value : undefined,
+            )
 
             // ── Video bitrate ceiling ────────────────────────────────────────
             const srcBitrate = src.videoBitrate ?? src.totalBitrate ?? null
@@ -944,6 +1035,26 @@ async function startDownload() {
                   </p>
                 </div>
 
+              </div>
+            </template>
+
+            <!-- Movie version selector (multi-version titles) -->
+            <template v-if="item.Type !== 'Series' && movieMediaSources.length > 1">
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-jellyfin-muted uppercase tracking-wider">Version</label>
+                <select
+                  v-model="selectedMovieMediaSourceId"
+                  class="w-full bg-jellyfin-bg border border-jellyfin-border text-jellyfin-text rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-jellyfin-primary focus:border-transparent transition"
+                >
+                  <option
+                    v-for="(source, idx) in movieMediaSources"
+                    :key="source.Id"
+                    :value="source.Id"
+                  >
+                    {{ movieVersionLabel(source, idx) }}
+                  </option>
+                </select>
+                <p class="text-xs text-jellyfin-muted">Select which movie file/version to transcode and download.</p>
               </div>
             </template>
 
